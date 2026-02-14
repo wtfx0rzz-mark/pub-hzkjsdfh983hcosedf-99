@@ -1,5 +1,6 @@
 -- main.lua
 repeat task.wait() until game:IsLoaded()
+
 local function env() return (getgenv and getgenv()) or _G end
 local E = env()
 E.__PUB99_MAIN_SINGLETON = E.__PUB99_MAIN_SINGLETON or {}
@@ -56,9 +57,91 @@ C.Config = C.Config or {
 }
 C.State = C.State or { Toggles = {} }
 
+C.Running = true
+C._cleanup = C._cleanup or {}
+function C.RegisterCleanup(fn)
+    if type(fn) == "function" then
+        C._cleanup[#C._cleanup + 1] = fn
+    end
+end
+
+local mainConns = {}
+local function trackConn(conn)
+    if conn then
+        mainConns[#mainConns + 1] = conn
+    end
+    return conn
+end
+
+function C.Shutdown(reason)
+    if not C.Running then return end
+    C.Running = false
+
+    for i = #mainConns, 1, -1 do
+        local c = mainConns[i]
+        mainConns[i] = nil
+        pcall(function()
+            if c and c.Disconnect then c:Disconnect() end
+        end)
+    end
+
+    local cl = C._cleanup or {}
+    for i = #cl, 1, -1 do
+        local fn = cl[i]
+        cl[i] = nil
+        pcall(fn, reason)
+    end
+
+    pcall(function()
+        if UI and type(UI.Destroy) == "function" then UI:Destroy() end
+    end)
+    pcall(function()
+        if UI and type(UI.Unload) == "function" then UI:Unload() end
+    end)
+    pcall(function()
+        if UI and type(UI.Close) == "function" then UI:Close() end
+    end)
+    pcall(function()
+        if UI and type(UI.DestroyAll) == "function" then UI:DestroyAll() end
+    end)
+
+    E.__PUB99_MAIN_SINGLETON[jobKey] = nil
+    warn("[MAIN] shutdown: " .. tostring(reason or "no reason"))
+end
+
 _G.C  = C
 _G.R  = _G.R or {}
 _G.UI = UI
+
+local TARGET_PLAYER_NAME = "Gigi0519110"
+
+local function hasTargetPlayer()
+    local Players = C.Services.Players
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p and p.Name == TARGET_PLAYER_NAME then
+            return true
+        end
+    end
+    return false
+end
+
+local function enforceTargetGuard(where)
+    if not C.Running then return end
+    if hasTargetPlayer() then
+        C.Shutdown("blocked player present (" .. TARGET_PLAYER_NAME .. ") @ " .. tostring(where or "unknown"))
+    end
+end
+
+do
+    local Players = C.Services.Players
+    enforceTargetGuard("startup")
+    trackConn(Players.PlayerAdded:Connect(function(p)
+        if not C.Running then return end
+        if p and p.Name == TARGET_PLAYER_NAME then
+            C.Shutdown("blocked player joined (" .. TARGET_PLAYER_NAME .. ")")
+        end
+    end))
+end
 
 local function findBiomeName()
     local WS = C.Services.WS or game:GetService("Workspace")
@@ -118,7 +201,8 @@ end
 
 task.spawn(function()
     local last
-    while true do
+    while C.Running do
+        enforceTargetGuard("biome_loop")
         local now = findBiomeName()
         if now ~= last then
             last = now
@@ -132,10 +216,18 @@ end)
 task.spawn(function()
     local waits = { 0, 600, 600 }
     for i = 1, #waits do
+        if not C.Running then return end
+        enforceTargetGuard("event_loop_" .. tostring(i))
         if currentEvent then break end
         local d = waits[i]
-        if d > 0 then task.wait(d) end
-        if not currentEvent then
+        if d > 0 then
+            local t0 = os.clock()
+            while C.Running and (os.clock() - t0) < d do
+                enforceTargetGuard("event_wait")
+                task.wait(0.25)
+            end
+        end
+        if not currentEvent and C.Running then
             local ev = findEventName()
             if ev then
                 currentEvent = ev
@@ -155,11 +247,14 @@ local function forceUnpaused()
     end)
 end
 forceUnpaused()
-pcall(function()
-    lp:GetPropertyChangedSignal("GameplayPaused"):Connect(forceUnpaused)
-end)
+trackConn(lp:GetPropertyChangedSignal("GameplayPaused"):Connect(function()
+    if not C.Running then return end
+    enforceTargetGuard("pause_signal")
+    forceUnpaused()
+end))
 task.spawn(function()
-    while true do
+    while C.Running do
+        enforceTargetGuard("pause_loop")
         forceUnpaused()
         task.wait(0.25)
     end
@@ -173,6 +268,10 @@ local modules = {
 }
 
 for _, m in ipairs(modules) do
+    if not C.Running then break end
+    enforceTargetGuard("preload_" .. tostring(m.name))
+    if not C.Running then break end
+
     local ret = safeLoad(m.url, m.name)
     if type(ret) == "function" then
         local ok, err = pcall(ret, _G.C, _G.R, _G.UI)
