@@ -1060,29 +1060,79 @@ return function(C, R, UI)
     -- UI WIRING
     --------------------------------------------------------------------
 
-    CombatTab:Toggle({
+    local killToggle
+    local smallToggle
+    local bigToggle
+    local _uiSync = false
+
+    local function _setToggleUI(tog, v)
+        if not tog then return end
+        _uiSync = true
+        pcall(function()
+            if tog.Set then
+                tog:Set(v)
+            elseif tog.SetValue then
+                tog:SetValue(v)
+            end
+        end)
+        _uiSync = false
+    end
+
+    local function _stopKillAura()
+        C.State.Toggles.CharacterAura = false
+        pcall(function() CharacterAura.Stop() end)
+        _setToggleUI(killToggle, false)
+    end
+
+    local function _stopSmallTreeAura()
+        C.State.Toggles.SmallTreeAura = false
+        pcall(function() SmallTreeAura.Stop() end)
+        _setToggleUI(smallToggle, false)
+    end
+
+    local function _stopBigTreeAura()
+        C.State.Toggles.BigTreeAura = false
+        pcall(function() BigTreeAura.Stop() end)
+        _setToggleUI(bigToggle, false)
+    end
+
+    killToggle = CombatTab:Toggle({
         Title = "Kill Aura",
         Value = C.State.Toggles.CharacterAura or false,
         Callback = function(on)
+            if _uiSync then return end
             C.State.Toggles.CharacterAura = on
-            if on then CharacterAura.Start() else CharacterAura.Stop() end
+            if on then
+                if C.State.Toggles.SmallTreeAura then _stopSmallTreeAura() end
+                if C.State.Toggles.BigTreeAura then _stopBigTreeAura() end
+                CharacterAura.Start()
+            else
+                CharacterAura.Stop()
+            end
         end
     })
 
-    CombatTab:Toggle({
+    smallToggle = CombatTab:Toggle({
         Title = "Small Tree Aura",
         Value = C.State.Toggles.SmallTreeAura or false,
         Callback = function(on)
+            if _uiSync then return end
+            if on and C.State.Toggles.CharacterAura then
+                _stopKillAura()
+            end
             C.State.Toggles.SmallTreeAura = on
             if on then SmallTreeAura.Start() else SmallTreeAura.Stop() end
         end
     })
 
-    local bigToggle
     bigToggle = CombatTab:Toggle({
         Title = "Big Tree Aura",
         Value = C.State.Toggles.BigTreeAura or false,
         Callback = function(on)
+            if _uiSync then return end
+            if on and C.State.Toggles.CharacterAura then
+                _stopKillAura()
+            end
             if on then
                 local bt = BigTreeAura.HasTool()
                 if bt then
@@ -1090,8 +1140,7 @@ return function(C, R, UI)
                     BigTreeAura.Start()
                 else
                     C.State.Toggles.BigTreeAura = false
-                    pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
-                    pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+                    _setToggleUI(bigToggle, false)
                 end
             else
                 C.State.Toggles.BigTreeAura = false
@@ -1122,8 +1171,7 @@ return function(C, R, UI)
             if C.State.Toggles.BigTreeAura and not BigTreeAura.HasTool() then
                 C.State.Toggles.BigTreeAura = false
                 BigTreeAura.Stop()
-                pcall(function() if bigToggle and bigToggle.Set then bigToggle:Set(false) end end)
-                pcall(function() if bigToggle and bigToggle.SetValue then bigToggle:SetValue(false) end end)
+                _setToggleUI(bigToggle, false)
             end
         end
         inv.ChildRemoved:Connect(check)
