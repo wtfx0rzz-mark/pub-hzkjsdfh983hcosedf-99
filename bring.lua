@@ -1197,8 +1197,6 @@ return function(C, R, UI)
         return nil
     end
 
-    tab:Section({ Title = "Actions" })
-
     tab:Section({ Title = "Bring Limits" })
     tab:Toggle({
         Title = "Enable per-name limit",
