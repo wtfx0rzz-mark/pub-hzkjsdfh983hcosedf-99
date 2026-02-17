@@ -7,6 +7,8 @@ return function(C, R, UI)
         local WS       = (C and C.Services and C.Services.WS)       or game:GetService("Workspace")
         local PPS      = game:GetService("ProximityPromptService")
         local Run      = (C and C.Services and C.Services.Run)      or game:GetService("RunService")
+        local Lighting = (C and C.Services and C.Services.Lighting) or game:GetService("Lighting")
+        local VIM      = game:GetService("VirtualInputManager")
 
         local lp = Players.LocalPlayer
         local Tabs = (UI and UI.Tabs) or {}
@@ -372,11 +374,12 @@ return function(C, R, UI)
             return b
         end
 
-        local campBtn = makeEdgeBtn("CampEdge", "Campfire", 1)
-        local lostBtn = makeEdgeBtn("LostEdge", "Lost Child", 2)
+        local campBtn      = makeEdgeBtn("CampEdge",       "Campfire", 1)
+        local lostBtn      = makeEdgeBtn("LostEdge",       "Lost Child", 2)
+        local nextChestBtn = makeEdgeBtn("NextChestEdge",  "Nearest Unopened Chest", 3)
 
         do
-            local allow = { CampEdge = true, LostEdge = true }
+            local allow = { CampEdge = true, LostEdge = true, NextChestEdge = true }
             for _, child in ipairs(stack:GetChildren()) do
                 if child:IsA("TextButton") and not allow[child.Name] then
                     pcall(function() child:Destroy() end)
@@ -389,6 +392,7 @@ return function(C, R, UI)
         local showCampEdge = true
         campBtn.Visible = showCampEdge
         lostBtn.Visible = false
+        nextChestBtn.Visible = false
 
         campBtn.MouseButton1Click:Connect(function()
             local cf = campfireTeleportCF()
@@ -403,6 +407,321 @@ return function(C, R, UI)
                 if campBtn then campBtn.Visible = state end
             end
         })
+
+        local chestFinderOn = false
+        local enableChestFinder, disableChestFinder
+
+        tab:Toggle({
+            Title = "Find Unopened Chests",
+            Value = false,
+            Callback = function(state)
+                if state then
+                    if enableChestFinder then enableChestFinder() end
+                else
+                    if disableChestFinder then disableChestFinder() end
+                end
+            end
+        })
+
+        do
+            local UID_OPEN_KEY = tostring(lp.UserId) .. "Opened"
+
+            local function itemsFolder2() return WS:FindFirstChild("Items") end
+            local function mainPart2(m)
+                if not m then return nil end
+                if m:IsA("BasePart") then return m end
+                if m:IsA("Model") then
+                    if m.PrimaryPart then return m.PrimaryPart end
+                    return m:FindFirstChildWhichIsA("BasePart")
+                end
+                return nil
+            end
+            local function groundBelow3(pos)
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                local ex = { lp.Character }
+                local items = WS:FindFirstChild("Items")
+                if items then table.insert(ex, items) end
+                params.FilterDescendantsInstances = ex
+                local start = pos + Vector3.new(0, 5, 0)
+                local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
+                if hit then return hit.Position end
+                hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+                return (hit and hit.Position) or pos
+            end
+
+            local chests = {}
+            local diamondModel = nil
+            local DIAMOND_PAIR_DIST = 9.8
+            local DIAMOND_PAIR_TOL  = 2.0
+            local EXCLUDE_NAMES = {
+                ["Stronghold Diamond Chest"] = true,
+                ["Mossy Chest"] = true,
+            }
+
+            local function isChestName2(n)
+                if type(n) ~= "string" then return false end
+                return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
+            end
+            local function isSnowChestName(n)
+                if type(n) ~= "string" then return false end
+                return (n == "Snow Chest") or (n:match("^Snow Chest%d+$") ~= nil)
+            end
+            local function isHalloweenChestName(n)
+                if type(n) ~= "string" then return false end
+                return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
+            end
+            local function chestOpened2(m)
+                if not m then return false end
+                return m:GetAttribute(UID_OPEN_KEY) == true
+            end
+            local function chestPos(m)
+                local mp = mainPart2(m)
+                if mp then return mp.Position end
+                local ok, cf = pcall(function() return m:GetPivot() end)
+                return ok and cf.Position or nil
+            end
+
+            local function markChest(m)
+                if not (m and m:IsA("Model")) then return end
+                if not isChestName2(m.Name) then return end
+                local pos = chestPos(m)
+                if not pos then return end
+                local excluded = EXCLUDE_NAMES[m.Name]
+                    or isSnowChestName(m.Name)
+                    or isHalloweenChestName(m.Name)
+                    or false
+                local rec = chests[m]
+                if not rec then
+                    chests[m] = { pos = pos, opened = chestOpened2(m), excluded = excluded }
+                    m:GetAttributeChangedSignal(UID_OPEN_KEY):Connect(function()
+                        local r = chests[m]
+                        if r then r.opened = chestOpened2(m) end
+                    end)
+                    m:GetPropertyChangedSignal("PrimaryPart"):Connect(function()
+                        local r = chests[m]
+                        if r then r.pos = chestPos(m) or r.pos end
+                    end)
+                    m.AncestryChanged:Connect(function(_, parent)
+                        if not parent then chests[m] = nil end
+                    end)
+                else
+                    rec.pos      = pos
+                    rec.opened   = chestOpened2(m)
+                    rec.excluded = excluded
+                end
+                if m.Name == "Stronghold Diamond Chest" then
+                    diamondModel = m
+                end
+            end
+
+            local function initialScan()
+                chests       = {}
+                diamondModel = nil
+                local items = itemsFolder2()
+                if not items then return end
+                for _, m in ipairs(items:GetChildren()) do
+                    markChest(m)
+                end
+            end
+
+            local function applyDiamondNeighborExclusion()
+                if not diamondModel then return end
+                local dpos = chestPos(diamondModel)
+                if not dpos then return end
+                for m, r in pairs(chests) do
+                    if m ~= diamondModel and not r.excluded then
+                        local dist = (r.pos - dpos).Magnitude
+                        if math.abs(dist - DIAMOND_PAIR_DIST) <= DIAMOND_PAIR_TOL then
+                            r.excluded = true
+                        end
+                    end
+                end
+            end
+
+            local function excludeNearestToDiamond()
+                if not diamondModel then return end
+                local dpos = chestPos(diamondModel)
+                if not dpos then return end
+                local bestM, bestD = nil, math.huge
+                for m, r in pairs(chests) do
+                    if m ~= diamondModel and m and m.Parent then
+                        local dist = (r.pos - dpos).Magnitude
+                        if dist < bestD then bestD, bestM = dist, m end
+                    end
+                end
+                if bestM then
+                    local rec = chests[bestM]
+                    if rec then rec.excluded = true end
+                end
+            end
+
+            local function updateChestRecord(m)
+                local r = chests[m]
+                if not r then return end
+                r.pos    = chestPos(m) or r.pos
+                r.opened = chestOpened2(m)
+                if m and m.Parent then
+                    r.excluded = EXCLUDE_NAMES[m.Name]
+                        or isSnowChestName(m.Name)
+                        or isHalloweenChestName(m.Name)
+                        or r.excluded
+                        or false
+                end
+            end
+
+            local function unopenedList()
+                local list = {}
+                for m, r in pairs(chests) do
+                    if m and m.Parent and not r.opened and not r.excluded then
+                        list[#list+1] = { m = m, pos = r.pos }
+                    end
+                end
+                table.sort(list, function(a, b)
+                    local rp = hrp()
+                    if not rp then return false end
+                    local da = (a.pos - rp.Position).Magnitude
+                    local db = (b.pos - rp.Position).Magnitude
+                    return da < db
+                end)
+                return list
+            end
+
+            local function hingeBackCenter(m)
+                local pts = {}
+                for _, d in ipairs(m:GetDescendants()) do
+                    if d.Name == "Hinge" then
+                        if d:IsA("BasePart") then
+                            table.insert(pts, d.Position)
+                        elseif d:IsA("Model") then
+                            local mp = mainPart2(d)
+                            if mp then table.insert(pts, mp.Position) end
+                        end
+                    end
+                end
+                if #pts == 0 then return nil end
+                local sum = Vector3.new(0, 0, 0)
+                for _, p in ipairs(pts) do sum += p end
+                return sum / #pts
+            end
+
+            local FRONT_DIST = 4.0
+
+            local function teleportNearChest(m)
+                if not m then return false end
+                local rec = chests[m]
+                if rec and rec.excluded then return false end
+                if EXCLUDE_NAMES[m.Name] or isSnowChestName(m.Name) or isHalloweenChestName(m.Name) then
+                    if rec then rec.excluded = true end
+                    return false
+                end
+                local mp = mainPart2(m)
+                if not mp then
+                    if rec then rec.excluded = true end
+                    return false
+                end
+                local chestCenter = mp.Position
+                local hingePos    = hingeBackCenter(m)
+                local dir
+                if hingePos then
+                    dir = (chestCenter - hingePos)
+                    if dir.Magnitude < 1e-3 then dir = -mp.CFrame.LookVector end
+                    dir = dir.Unit
+                else
+                    local root = hrp()
+                    if root then
+                        local vec = root.Position - chestCenter
+                        if vec.Magnitude > 0.001 then dir = (-vec).Unit else dir = (-mp.CFrame.LookVector).Unit end
+                    else
+                        dir = (-mp.CFrame.LookVector).Unit
+                    end
+                end
+                local desired = chestCenter + dir * FRONT_DIST
+                local ground  = groundBelow3(desired)
+                local standPos = Vector3.new(desired.X, ground.Y + 2.5, desired.Z)
+                teleportSticky(CFrame.new(standPos, chestCenter), true)
+                return true
+            end
+
+            local cfHB, childAdd, childRem
+
+            nextChestBtn.MouseButton1Click:Connect(function()
+                if not hrp() then return end
+                local tried = 0
+                while true do
+                    local list = unopenedList()
+                    local count = #list
+                    if count == 0 or tried >= count then
+                        nextChestBtn.Text    = "Nearest Unopened Chest"
+                        nextChestBtn.Visible = false
+                        return
+                    end
+                    local target = list[1]
+                    local ok = teleportNearChest(target.m)
+                    if ok then
+                        task.delay(0.5, function()
+                            local l2 = unopenedList()
+                            nextChestBtn.Visible = chestFinderOn and (#l2 > 0)
+                            if #l2 > 0 then
+                                nextChestBtn.Text = ("Nearest Unopened Chest (%d)"):format(#l2)
+                            else
+                                nextChestBtn.Text = "Nearest Unopened Chest"
+                            end
+                        end)
+                        return
+                    else
+                        local rec2 = chests[target.m]
+                        if rec2 then rec2.excluded = true end
+                        tried += 1
+                    end
+                end
+            end)
+
+            local function refreshButton()
+                local list = unopenedList()
+                nextChestBtn.Visible = chestFinderOn and (#list > 0)
+                if #list > 0 then
+                    nextChestBtn.Text = ("Nearest Unopened Chest (%d)"):format(#list)
+                else
+                    nextChestBtn.Text = "Nearest Unopened Chest"
+                end
+            end
+
+            enableChestFinder = function()
+                if chestFinderOn then return end
+                chestFinderOn = true
+                nextChestBtn.Visible = false
+                initialScan()
+                applyDiamondNeighborExclusion()
+                excludeNearestToDiamond()
+                local items = itemsFolder2()
+                if items then
+                    childAdd = items.ChildAdded:Connect(function(c)
+                        markChest(c)
+                        applyDiamondNeighborExclusion()
+                        excludeNearestToDiamond()
+                    end)
+                    childRem = items.ChildRemoved:Connect(function(c)
+                        chests[c] = nil
+                    end)
+                end
+                cfHB = Run.Heartbeat:Connect(function()
+                    for m, _ in pairs(chests) do
+                        if m and m.Parent then updateChestRecord(m) end
+                    end
+                    refreshButton()
+                end)
+                refreshButton()
+            end
+
+            disableChestFinder = function()
+                chestFinderOn = false
+                if cfHB then cfHB:Disconnect(); cfHB = nil end
+                if childAdd then childAdd:Disconnect(); childAdd = nil end
+                if childRem then childRem:Disconnect(); childRem = nil end
+                nextChestBtn.Visible = false
+            end
+        end
 
         local MAX_TO_SAVE, savedCount = 4, 0
         local autoLostEnabled = false
@@ -743,11 +1062,11 @@ return function(C, R, UI)
         end
         local function equipFlashlight(name)
             local inv = lp and lp:FindFirstChild("Inventory")
+            local equip = getRemote("EquipItemHandle")
+            local eqf = getRemote("EquippedFlashlight")
             if not (inv and name) then return false end
             local item = inv:FindFirstChild(name)
             if not item then return false end
-            local equip = getRemote("EquipItemHandle")
-            local eqf = getRemote("EquippedFlashlight")
             if equip and equip:IsA("RemoteEvent") then pcall(function() equip:FireServer("FireAllClients", item) end) end
             if eqf and eqf:IsA("RemoteEvent") then pcall(function() eqf:FireServer() end) end
             return true
@@ -769,7 +1088,7 @@ return function(C, R, UI)
         end
         local function nearestMonsterWithin(radius)
             local chars = WS:FindFirstChild("Characters")
-            local root = hrp()
+            local root  = hrp()
             if not (chars and root) then return nil end
             local best, bestD = nil, radius
             for _, m in ipairs(chars:GetChildren()) do
@@ -801,7 +1120,6 @@ return function(C, R, UI)
             end)
             return ok
         end
-
         local function enableAutoStun()
             if autoStunOn then return end
             autoStunOn = true
@@ -834,7 +1152,6 @@ return function(C, R, UI)
         local function disableAutoStun()
             autoStunOn = false
         end
-
         tab:Toggle({
             Title = "Auto Stun Monster",
             Value = true,
@@ -844,392 +1161,387 @@ return function(C, R, UI)
         })
         task.defer(enableAutoStun)
 
-        --=====================================================
-        -- Auto Revive (Bandage/MedKit only)  [PATCHED IN]
-        -- (UI title requested: "Auto Revive")
-        --=====================================================
-        local AR_Enable = false
-        local AR_Running = false
-        local AR_Busy = false
-        local AR_InProgress = {}
-        local AR_HealingAvailable = false
+        local noShadowsOn, lightConn = false, nil
+        local origGlobalShadows = nil
+        local lightOrig = setmetatable({}, { __mode = "k" })
+        local function applyLight(l)
+            if l:IsA("PointLight") or l:IsA("SpotLight") or l:IsA("SurfaceLight") then
+                if lightOrig[l] == nil then lightOrig[l] = l.Shadows end
+                pcall(function() l.Shadows = false end)
+            end
+        end
+        local function enableNoShadows()
+            if noShadowsOn then return end
+            noShadowsOn = true
+            origGlobalShadows = Lighting.GlobalShadows
+            pcall(function() Lighting.GlobalShadows = false end)
+            for _, d in ipairs(Lighting:GetDescendants()) do applyLight(d) end
+            lightConn = Lighting.DescendantAdded:Connect(applyLight)
+        end
+        local function disableNoShadows()
+            noShadowsOn = false
+            if lightConn then lightConn:Disconnect() lightConn = nil end
+            if origGlobalShadows ~= nil then pcall(function() Lighting.GlobalShadows = origGlobalShadows end) end
+            for l, orig in pairs(lightOrig) do
+                if l and l.Parent then pcall(function() l.Shadows = orig end) end
+            end
+        end
+        tab:Toggle({ Title = "Disable Shadows", Value = false, Callback = function(state) if state then enableNoShadows() else disableNoShadows() end end })
+        local cam = WS.CurrentCamera
+        WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
-        local AR_SCAN_INTERVAL = 0.8
-        local AR_MAX_ATTEMPTS = 3
-        local AR_CONFIRM_WAIT = 2.2
-        local AR_CONFIRM_STEP = 0.12
-        local AR_STAY_SEC = 5.0
+        local function isBigTreeName(n)
+            if not n then return false end
+            if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
+            return (type(n) == "string") and (n:match("^WebbedTreeBig%d*$") ~= nil)
+        end
+        local hideBigTreesOn, hideConn, hideAcc = false, nil, 0
+        local function deleteBigTreesOnce()
+            local count = 0
+            for _, d in ipairs(WS:GetDescendants()) do
+                if d:IsA("Model") and isBigTreeName(d.Name) then
+                    pcall(function() d:Destroy() end)
+                    count += 1
+                end
+            end
+            return count
+        end
+        local function enableHideBigTrees()
+            if hideBigTreesOn then return end
+            hideBigTreesOn = true
+            deleteBigTreesOnce()
+            if hideConn then hideConn:Disconnect() end
+            hideAcc = 0
+            hideConn = Run.Heartbeat:Connect(function(dt)
+                hideAcc += dt
+                if hideAcc >= 60 then
+                    hideAcc = 0
+                    deleteBigTreesOnce()
+                end
+            end)
+        end
+        local function disableHideBigTrees()
+            hideBigTreesOn = false
+            if hideConn then hideConn:Disconnect() hideConn = nil end
+        end
+        tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
-        local AR_STAND_DIST = 3.0
-        local AR_STAND_UP   = 2.0
+        local COIN_STATE = {
+            Radius = 75,
+            ScanInterval = 0.15,
+            FireCooldown = 0.35,
+            MaxPerScan = 8,
+        }
+        local lastCoinFireAt = setmetatable({}, { __mode = "k" })
 
-        local invConnA, invConnR
-        local bpConnA, bpConnR
-        local chConnA, chConnR, chConnC
+        local function coinNow() return os.clock() end
+        local function coinItemsFolder()
+            return WS:FindFirstChild("Items") or WS
+        end
+        local function coinTopModelUnderItems(part, items)
+            local cur = part
+            local lastModel = nil
+            while cur and cur ~= WS and cur ~= items do
+                if cur:IsA("Model") then lastModel = cur end
+                cur = cur.Parent
+            end
+            return lastModel
+        end
+        local function coinResolveTopModelFromPart(part)
+            if not (part and part.Parent) then return nil end
+            local items = coinItemsFolder()
+            local m = coinTopModelUnderItems(part, items)
+            if m and m.Parent and (not items or m:IsDescendantOf(items)) then
+                return m
+            end
+            local anc = part:FindFirstAncestorOfClass("Model")
+            if anc and anc.Parent and (not items or anc:IsDescendantOf(items)) then
+                return anc
+            end
+            if part:IsA("Model") then return part end
+            return nil
+        end
+        local function getCollectCointsRemote()
+            local re = RS:FindFirstChild("RemoteEvents")
+            if not re then return nil end
+            return re:FindFirstChild("RequestCollectCoints")
+        end
+        local collectCointsRemote = getCollectCointsRemote()
 
-        local function groundBelowRevive(pos)
+        local function invokeCollect(remote, a1)
+            if not (remote and remote.Parent) then return false end
+            if not (a1 and a1.Parent) then return false end
+            local ok = pcall(function()
+                remote:InvokeServer(a1)
+            end)
+            return ok
+        end
+        local function shouldFireCoin(inst)
+            local lt = lastCoinFireAt[inst]
+            if lt and (coinNow() - lt) < COIN_STATE.FireCooldown then return false end
+            lastCoinFireAt[inst] = coinNow()
+            return true
+        end
+        local function isCoinModel(m)
+            return m and m.Parent and m:IsA("Model") and m.Name == "Coin Stack"
+        end
+
+        local function coinScanOnce()
+            local root = hrp()
+            if not root then return end
+
+            if not collectCointsRemote or not collectCointsRemote.Parent then
+                collectCointsRemote = getCollectCointsRemote()
+            end
+            if not (collectCointsRemote and collectCointsRemote.Parent) then return end
+
+            local center = root.Position
+            local params = OverlapParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { lp.Character }
+
+            local parts = WS:GetPartBoundsInRadius(center, COIN_STATE.Radius, params) or {}
+            local uniq = {}
+            local fired = 0
+
+            for _, p in ipairs(parts) do
+                if fired >= COIN_STATE.MaxPerScan then break end
+                if p:IsA("BasePart") then
+                    local m = coinResolveTopModelFromPart(p)
+                    if m and isCoinModel(m) and not uniq[m] then
+                        uniq[m] = true
+                        if shouldFireCoin(m) then
+                            if invokeCollect(collectCointsRemote, m) then
+                                fired += 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        local coinOn = true
+        local coinConn, coinAcc = nil, 0
+
+        local function enableCoin()
+            if coinConn then return end
+            coinOn = true
+            coinAcc = 0
+            coinConn = Run.Heartbeat:Connect(function(dt)
+                coinAcc += dt
+                if coinAcc < COIN_STATE.ScanInterval then return end
+                coinAcc = 0
+                pcall(coinScanOnce)
+            end)
+        end
+
+        local function disableCoin()
+            coinOn = false
+            if coinConn then coinConn:Disconnect(); coinConn = nil end
+        end
+
+        tab:Toggle({ Title = "Auto Collect Coins", Value = true, Callback = function(state) if state then enableCoin() else disableCoin() end end })
+        if coinOn then enableCoin() end
+
+        local noPauseOn, prevPauseMode
+        local function enableNoStreamingPause()
+            if noPauseOn then return end
+            noPauseOn = true
+            pcall(function()
+                prevPauseMode = WS.StreamingPauseMode
+                WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled
+            end)
+        end
+        enableNoStreamingPause()
+
+        local function itemsFolder() return WS:FindFirstChild("Items") end
+        local function collectSaplingsSnapshot()
+            local items = itemsFolder(); if not items then return {} end
+            local list = {}
+            for _, m in ipairs(items:GetChildren()) do
+                if m:IsA("Model") and m.Name == "Sapling" then
+                    local mp = mainPart(m)
+                    if mp then list[#list+1] = m end
+                end
+            end
+            return list
+        end
+        local function groundBelow2(pos)
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
             local ex = { lp.Character }
-
             local map = WS:FindFirstChild("Map")
             if map then
                 local fol = map:FindFirstChild("Foliage")
                 if fol then table.insert(ex, fol) end
             end
-
-            local items = WS:FindFirstChild("Items")
-            if items then table.insert(ex, items) end
-
+            local items = WS:FindFirstChild("Items"); if items then table.insert(ex, items) end
+            local chars = WS:FindFirstChild("Characters"); if chars then table.insert(ex, chars) end
             params.FilterDescendantsInstances = ex
-
             local start = pos + Vector3.new(0, 5, 0)
             local hit = WS:Raycast(start, Vector3.new(0, -1000, 0), params)
             if hit then return hit.Position end
-
             hit = WS:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
             return (hit and hit.Position) or pos
         end
-
-        local function hasItemNamed(name)
-            if not name then return false end
-            local inv = lp:FindFirstChild("Inventory")
-            if inv and inv:FindFirstChild(name) then return true end
-            local bp = lp:FindFirstChild("Backpack")
-            if bp and bp:FindFirstChild(name) then return true end
-            local ch = lp.Character
-            if ch and ch:FindFirstChild(name) then return true end
-            return false
+        local function groundAtFeetCF()
+            local root = hrp(); if not root then return nil end
+            local g = groundBelow2(root.Position)
+            local look = root.CFrame.LookVector
+            local pos = Vector3.new(g.X, g.Y + 0.6, g.Z)
+            return CFrame.new(pos, pos + look)
         end
-
-        local function recomputeHealingAvailable()
-            AR_HealingAvailable = hasItemNamed("Bandage") or hasItemNamed("MedKit")
-            return AR_HealingAvailable
-        end
-
-        local function disconnectConn(c)
-            if c then pcall(function() c:Disconnect() end) end
-        end
-
-        local function startHealingWatch()
-            disconnectConn(invConnA); disconnectConn(invConnR)
-            disconnectConn(bpConnA);  disconnectConn(bpConnR)
-            disconnectConn(chConnA);  disconnectConn(chConnR); disconnectConn(chConnC)
-
-            local function bind(container)
-                if not container then return nil, nil end
-                local a = container.ChildAdded:Connect(function() recomputeHealingAvailable() end)
-                local r = container.ChildRemoved:Connect(function() recomputeHealingAvailable() end)
-                return a, r
-            end
-
-            task.spawn(function()
-                local inv = lp:WaitForChild("Inventory", 10)
-                if inv then invConnA, invConnR = bind(inv) end
-
-                local bp = lp:FindFirstChild("Backpack") or lp:WaitForChild("Backpack", 10)
-                if bp then bpConnA, bpConnR = bind(bp) end
-
-                local function bindChar(ch)
-                    disconnectConn(chConnA); disconnectConn(chConnR)
-                    if ch then chConnA, chConnR = bind(ch) end
-                end
-
-                bindChar(lp.Character)
-                chConnC = lp.CharacterAdded:Connect(function(ch)
-                    task.defer(function() bindChar(ch) end)
+        local function dropModelAtFeet(m)
+            local startDrag = getRemote("RequestStartDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
+            if startDrag then pcall(function() startDrag:FireServer(m) end); pcall(function() startDrag:FireServer(DUMMY_MODEL) end) end
+            Run.Heartbeat:Wait()
+            local cf = groundAtFeetCF()
+            if cf then
+                pcall(function()
+                    if m:IsA("Model") then
+                        m:PivotTo(cf)
+                    else
+                        local p = mainPart(m)
+                        if p then p.CFrame = cf end
+                    end
                 end)
-
-                recomputeHealingAvailable()
-            end)
+            end
+            task.wait(0.05)
+            if stopDrag then pcall(function() stopDrag:FireServer(m) end); pcall(function() stopDrag:FireServer(DUMMY_MODEL) end) end
         end
-
-        local function bodyNameMatchesPlayer(bodyName, plr)
-            if type(bodyName) ~= "string" or not plr then return false end
-            local n1 = tostring(plr.Name or "") .. " Body"
-            local n2 = tostring(plr.DisplayName or "") .. " Body"
-            return bodyName == n1 or bodyName == n2
-        end
-
-        local function findPlayerBodyModel(plr)
-            local chars = WS:FindFirstChild("Characters") or WS
-            for _, child in ipairs(chars:GetChildren()) do
-                if child and child:IsA("Model") and bodyNameMatchesPlayer(child.Name, plr) then
-                    return child
+        local SAPLING_DROP_PER_SEC = 25
+        local function actionDropSaplings()
+            local snap = collectSaplingsSnapshot()
+            if #snap == 0 then return end
+            local interval = 1 / math.max(0.1, SAPLING_DROP_PER_SEC)
+            for i = 1, #snap do
+                local m = snap[i]
+                if m and m.Parent then
+                    dropModelAtFeet(m)
+                    task.wait(interval)
                 end
             end
-            return nil
         end
-
-        local function bodyGoneForPlayer(plr, originalBody)
-            if originalBody and (not originalBody.Parent) then return true end
-            return findPlayerBodyModel(plr) == nil
-        end
-
-        local function findRevivePrompt(body)
-            if not (body and body.Parent) then return nil end
-            local best = nil
-            local bestScore = -1
-
-            for _, d in ipairs(body:GetDescendants()) do
-                if d:IsA("ProximityPrompt") then
-                    local a = tostring(d.ActionText or ""):lower()
-                    local o = tostring(d.ObjectText or ""):lower()
-                    local n = tostring(d.Name or ""):lower()
-
-                    local score = 0
-                    if a:find("revive", 1, true) then score += 3 end
-                    if o:find("revive", 1, true) then score += 2 end
-                    if n:find("revive", 1, true) then score += 1 end
-
-                    if score > bestScore then
-                        bestScore = score
-                        best = d
-                    end
-                end
-            end
-
-            if best then return best end
-            return body:FindFirstChildWhichIsA("ProximityPrompt", true)
-        end
-
-        local function triggerPromptRevive(prompt)
-            if not (prompt and prompt.Parent) then return false end
-            pcall(function() prompt.Enabled = true end)
-            pcall(function() prompt.RequiresLineOfSight = false end)
-            pcall(function()
-                if typeof(prompt.HoldDuration) == "number" and prompt.HoldDuration > 0.12 then
-                    prompt.HoldDuration = 0.12
-                end
-            end)
-
-            local ok = pcall(function()
-                PPS:TriggerPrompt(prompt)
-            end)
-            if ok then return true end
-
-            local hd = 0.08
-            pcall(function()
-                if typeof(prompt.HoldDuration) == "number" then
-                    hd = math.clamp(prompt.HoldDuration, 0.02, 0.12)
-                end
-            end)
-
-            local ok2 = pcall(function()
-                prompt:InputHoldBegin()
-                task.wait(hd)
-                prompt:InputHoldEnd()
-            end)
-            return ok2
-        end
-
-        local function teleportToCFRevive(cf)
-            local root = hrp()
-            if not root then return false end
-            local ch = lp.Character
-            if ch and ch.Parent then pcall(function() ch:PivotTo(cf) end) end
-            local ok = pcall(function() root.CFrame = cf end)
-            if ok then pcall(function() zeroAssembly(root) end) end
-            return ok
-        end
-
-        local function teleportNearBody(body)
-            local root = hrp()
-            local bp = mainPart(body)
-            if not (root and bp) then return false end
-
-            local bodyPos = bp.Position
-            local rootPos = root.Position
-            local dir = (rootPos - bodyPos)
-            if dir.Magnitude < 0.5 then
-                dir = -bp.CFrame.LookVector
+        local PLANT_START_DELAY       = 1.0
+        local PLANT_Y_EPSILON         = 0.15
+        local PLANT_INTERACTION_DELAY = 0
+        local PLANT_CHAIN_DELAY       = nil
+        local function yieldPlant(seconds)
+            if seconds == nil then return end
+            if seconds <= 0 then
+                Run.Heartbeat:Wait()
             else
-                dir = dir.Unit
+                task.wait(seconds)
             end
-
-            local standPos = bodyPos + dir * AR_STAND_DIST + Vector3.new(0, AR_STAND_UP, 0)
-            local g = groundBelowRevive(standPos)
-            standPos = Vector3.new(standPos.X, g.Y + AR_STAND_UP, standPos.Z)
-
-            return teleportToCFRevive(CFrame.new(standPos, bodyPos))
         end
-
-        local function collectDownedQueue()
-            local chars = WS:FindFirstChild("Characters") or WS
-            local out = {}
-
-            local root = hrp()
-            local origin = root and root.Position or Vector3.new(0,0,0)
-
-            local players = Players:GetPlayers()
-
-            for _, m in ipairs(chars:GetChildren()) do
-                if m:IsA("Model") then
-                    local nm = tostring(m.Name or "")
-                    if nm:match("%sBody$") then
-                        local owner = nil
-                        for _, p in ipairs(players) do
-                            if p ~= lp and bodyNameMatchesPlayer(nm, p) then
-                                owner = p
-                                break
-                            end
-                        end
-                        if owner and not AR_InProgress[owner.UserId] and mainPart(m) then
-                            local ppart = mainPart(m)
-                            local dist = ppart and (ppart.Position - origin).Magnitude or math.huge
-                            out[#out+1] = { plr = owner, body = m, dist = dist }
-                        end
-                    end
-                end
+        local function computePlantPosFromModel(m)
+            local mp = mainPart(m); if not mp then return nil end
+            local g  = groundBelow2(mp.Position)
+            local baseY = mp.Position.Y - (mp.Size.Y * 0.5)
+            local y = math.min(g.Y, baseY) - PLANT_Y_EPSILON
+            return Vector3.new(mp.Position.X, y, mp.Position.Z)
+        end
+        local function plantModelAtExactPosition(m, pos)
+            local plantRF = getRemote("RequestPlantItem")
+            if not (plantRF and m and m.Parent and pos) then return end
+            local startDrag = getRemote("RequestStartDraggingItem")
+            local stopDrag  = getRemote("StopDraggingItem")
+            if startDrag then
+                pcall(function() startDrag:FireServer(m) end)
+                pcall(function() startDrag:FireServer(DUMMY_MODEL) end)
             end
-
-            table.sort(out, function(a,b)
-                if a.dist == b.dist then
-                    return tostring(a.plr.Name or "") < tostring(b.plr.Name or "")
+            if PLANT_INTERACTION_DELAY > 0 then task.wait(PLANT_INTERACTION_DELAY) else Run.Heartbeat:Wait() end
+            local ok = pcall(function()
+                if plantRF:IsA("RemoteFunction") then
+                    return plantRF:InvokeServer(m, pos)
+                else
+                    plantRF:FireServer(m, pos); return true
                 end
-                return a.dist < b.dist
             end)
-
-            return out
-        end
-
-        local function tryReviveOne(plr, body, startCF)
-            if not (plr and body and startCF) then return false end
-            if AR_InProgress[plr.UserId] then return false end
-            AR_InProgress[plr.UserId] = true
-
-            local ok = false
-
-            local function finally()
-                pcall(function() teleportToCFRevive(startCF) end)
-                AR_InProgress[plr.UserId] = nil
+            if not ok then
+                pcall(function()
+                    if plantRF:IsA("RemoteFunction") then
+                        return plantRF:InvokeServer(DUMMY_MODEL, pos)
+                    else
+                        plantRF:FireServer(DUMMY_MODEL, pos)
+                    end
+                end)
             end
-
-            local success = xpcall(function()
-                if not recomputeHealingAvailable() then return end
-
-                local prompt = findRevivePrompt(body)
-                if not prompt then return end
-
-                local attempt = 0
-                while attempt < AR_MAX_ATTEMPTS do
-                    attempt += 1
-                    if not (body and body.Parent) then break end
-                    if bodyGoneForPlayer(plr, body) then ok = true break end
-
-                    teleportNearBody(body)
-                    task.wait(0.06)
-                    triggerPromptRevive(prompt)
-
-                    local t0 = os.clock()
-                    while os.clock() - t0 < AR_CONFIRM_WAIT do
-                        if bodyGoneForPlayer(plr, body) then ok = true break end
-                        task.wait(AR_CONFIRM_STEP)
-                    end
-                    if ok then break end
-
-                    task.wait(0.18)
-                    prompt = findRevivePrompt(body) or prompt
-                end
-
-                if ok then
-                    local stayUntil = os.clock() + AR_STAY_SEC
-                    while os.clock() < stayUntil do
-                        task.wait(0.2)
-                    end
-
-                    if not bodyGoneForPlayer(plr, body) then
-                        local extra = 0
-                        while extra < AR_MAX_ATTEMPTS do
-                            extra += 1
-                            if bodyGoneForPlayer(plr, body) then break end
-                            prompt = findRevivePrompt(body) or prompt
-                            if prompt then triggerPromptRevive(prompt) end
-
-                            local t1 = os.clock()
-                            while os.clock() - t1 < AR_CONFIRM_WAIT do
-                                if bodyGoneForPlayer(plr, body) then break end
-                                task.wait(AR_CONFIRM_STEP)
-                            end
-                            if bodyGoneForPlayer(plr, body) then break end
-                            task.wait(0.15)
-                        end
-                        ok = bodyGoneForPlayer(plr, body)
-                    end
-                end
-            end, debug.traceback)
-
-            finally()
-            return success and ok
+            if PLANT_INTERACTION_DELAY > 0 then task.wait(PLANT_INTERACTION_DELAY) else Run.Heartbeat:Wait() end
+            if stopDrag then
+                pcall(function() stopDrag:FireServer(m) end)
+                pcall(function() stopDrag:FireServer(DUMMY_MODEL) end)
+            end
+        end
+        local function plantModelInPlace(m)
+            local pos = computePlantPosFromModel(m); if not pos then return end
+            plantModelAtExactPosition(m, pos)
+        end
+        local function actionPlantAllSaplings()
+            task.wait(PLANT_START_DELAY)
+            local snap = collectSaplingsSnapshot()
+            for i = 1, #snap do
+                local m = snap[i]
+                if m and m.Parent then plantModelInPlace(m) end
+                yieldPlant(PLANT_CHAIN_DELAY)
+            end
         end
 
-        local function runRevivePass()
-            if AR_Busy then return end
-            if not recomputeHealingAvailable() then return end
+        tab:Section({ Title = "Saplings" })
+        tab:Button({ Title = "Drop Saplings", Callback = function() actionDropSaplings() end })
+        tab:Button({ Title = "Plant All Saplings", Callback = function() actionPlantAllSaplings() end })
 
+        local CIRCLE_SAPLINGS_PER_RING = 20
+        local CIRCLE_RADIUS            = 4.0
+        local CIRCLE_HEIGHT_STEP       = 10.0
+
+        local function actionCirclePlantSaplingsAtPosition()
+            local items = itemsFolder and itemsFolder() or WS:FindFirstChild("Items")
+            if not items then return end
+            local saplings = {}
+            for _, m in ipairs(items:GetChildren()) do
+                if m:IsA("Model") and m.Name == "Sapling" then
+                    saplings[#saplings+1] = m
+                end
+            end
+            if #saplings == 0 then return end
             local root = hrp()
             if not root then return end
-
-            AR_Busy = true
-            local startCF = root.CFrame
-
-            local queue = collectDownedQueue()
-            for _, it in ipairs(queue) do
-                if not recomputeHealingAvailable() then break end
-                if it and it.plr and it.body and it.body.Parent then
-                    tryReviveOne(it.plr, it.body, startCF)
-                    task.wait(0.08)
-                    local r2 = hrp()
-                    if r2 then startCF = r2.CFrame end
+            local origin = root.Position
+            for i, m in ipairs(saplings) do
+                if m and m.Parent then
+                    local idx       = i - 1
+                    local ringIndex = math.floor(idx / CIRCLE_SAPLINGS_PER_RING)
+                    local angleIdx  = idx % CIRCLE_SAPLINGS_PER_RING
+                    local theta     = (2 * math.pi / CIRCLE_SAPLINGS_PER_RING) * angleIdx
+                    local y = origin.Y + ringIndex * CIRCLE_HEIGHT_STEP
+                    local x = origin.X + math.cos(theta) * CIRCLE_RADIUS
+                    local z = origin.Z + math.sin(theta) * CIRCLE_RADIUS
+                    local pos = Vector3.new(x, y, z)
+                    plantModelAtExactPosition(m, pos)
                 end
             end
-
-            AR_Busy = false
         end
 
-        local function startAutoRevive()
-            if AR_Running then return end
-            AR_Running = true
-
-            local key = "__AutoRevive_Loop__"
-            local prev = _G[key]
-            if prev and typeof(prev) == "thread" then
-                _G[key] = nil
-            end
-
-            _G[key] = task.spawn(function()
-                while AR_Running do
-                    task.wait(AR_SCAN_INTERVAL)
-                    if not (AR_Running and AR_Enable) then continue end
-                    if AR_Busy then continue end
-                    if not recomputeHealingAvailable() then continue end
-                    local q = collectDownedQueue()
-                    if #q > 0 then
-                        runRevivePass()
-                    end
-                end
-            end)
-        end
-
-        local function stopAutoRevive()
-            AR_Running = false
-        end
-
-        if tab.Section then
-            tab:Section({ Title = "Auto Revive" })
-        end
-
-        tab:Toggle({
-            Title = "Auto Revive",
-            Value = false,
-            Callback = function(v)
-                AR_Enable = v and true or false
-                if AR_Enable then startAutoRevive() else stopAutoRevive() end
+        tab:Button({
+            Title = "Auto Plant Saplings (Circles Here)",
+            Callback = function()
+                actionCirclePlantSaplingsAtPosition()
             end
         })
 
-        startHealingWatch()
-        recomputeHealingAvailable()
+        local function enableLoadDefenseSafe()
+            local f = nil
+            if type(enableLoadDefense) == "function" then f = enableLoadDefense end
+            if not f then
+                local ok, g = pcall(function() return _G and _G.enableLoadDefense end)
+                if ok and type(g) == "function" then f = g end
+            end
+            if f then pcall(f) end
+        end
+        local loadDefenseOnDefault = true
+        if loadDefenseOnDefault then enableLoadDefenseSafe() end
 
         Players.LocalPlayer.CharacterAdded:Connect(function()
             local playerGui2 = lp:WaitForChild("PlayerGui")
@@ -1237,6 +1549,11 @@ return function(C, R, UI)
             if edgeGui2 and edgeGui2.Parent ~= playerGui2 then edgeGui2.Parent = playerGui2 end
             if campBtn then campBtn.Visible = showCampEdge end
             lostBtn.Visible = false
+            if noShadowsOn and not lightConn then enableNoShadows() end
+            if loadDefenseOnDefault then enableLoadDefenseSafe() end
+            pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
+            if coinOn and not coinConn then enableCoin() end
+            if chestFinderOn and enableChestFinder then enableChestFinder() end
             if godOn then
                 task.wait(0.15)
                 bindGodToHumanoid()
