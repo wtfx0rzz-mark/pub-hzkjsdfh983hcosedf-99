@@ -6,6 +6,10 @@ return function(C, R, UI)
     local RunService = C.Services.RunService or game:GetService("RunService")
     local UIS        = C.Services.UIS        or game:GetService("UserInputService")
 
+    local WS  = C.Services.WS  or game:GetService("Workspace")
+    local VIM = C.Services.VIM or game:GetService("VirtualInputManager")
+    local VU  = C.Services.VU  or game:GetService("VirtualUser")
+
     local lp = Players.LocalPlayer
     local tab = UI.Tabs and UI.Tabs.Player
     assert(tab, "Player tab not found in UI")
@@ -283,6 +287,116 @@ return function(C, R, UI)
     end
 
     --========================
+    -- AFK (plucked from diamonds.lua)
+    --========================
+    if C.State.AFK == nil then C.State.AFK = false end
+
+    if C.State._AFKConn ~= nil then
+        pcall(function() C.State._AFKConn:Disconnect() end)
+        C.State._AFKConn = nil
+    end
+
+    local INPUT_BASE_INTERVAL_S = 5
+
+    local function now() return os.clock() end
+
+    local _seeded = false
+    local function seedOnce()
+        if _seeded then return end
+        _seeded = true
+        pcall(function()
+            math.randomseed(tonumber(string.gsub(tostring(os.clock()), "%D", "")) or tick())
+        end)
+    end
+    seedOnce()
+
+    local function randf(a, b)
+        return a + (b - a) * math.random()
+    end
+
+    local function nextJitteredIntervalSeconds(base)
+        local b = tonumber(base) or INPUT_BASE_INTERVAL_S
+        local v = randf(b - 2.0, b + 1.5)
+        if v < 1.0 then v = 1.0 end
+        return v
+    end
+
+    local function vimTap(keyCode)
+        local ok = pcall(function()
+            VIM:SendKeyEvent(true, keyCode, false, game)
+            task.wait(0.05)
+            VIM:SendKeyEvent(false, keyCode, false, game)
+        end)
+        return ok
+    end
+
+    local function vuDoRandomAction()
+        local ok = pcall(function()
+            VU:CaptureController()
+            local cam = WS.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+            local x = math.floor(randf(40, math.max(41, vp.X - 40)))
+            local y = math.floor(randf(40, math.max(41, vp.Y - 40)))
+            local pos = Vector2.new(x, y)
+            if math.random(1, 3) == 1 then
+                VU:ClickButton2(pos)
+            else
+                VU:ClickButton1(pos)
+            end
+        end)
+        return ok
+    end
+
+    local AFK_KEYS = {
+        Enum.KeyCode.One,
+        Enum.KeyCode.Two,
+        Enum.KeyCode.Three,
+        Enum.KeyCode.W,
+        Enum.KeyCode.A,
+        Enum.KeyCode.S,
+        Enum.KeyCode.D,
+        Enum.KeyCode.Space,
+    }
+
+    local function afkKeyAction()
+        local kc = AFK_KEYS[math.random(1, #AFK_KEYS)]
+        return vimTap(kc)
+    end
+
+    local function afkComboAction()
+        local roll = math.random(1, 100)
+        if roll <= 45 then
+            afkKeyAction()
+        elseif roll <= 80 then
+            vuDoRandomAction()
+        else
+            afkKeyAction()
+            task.wait(0.08)
+            vuDoRandomAction()
+        end
+    end
+
+    local function afkStart()
+        if C.State._AFKConn then return end
+        local nextAt = now() + nextJitteredIntervalSeconds(INPUT_BASE_INTERVAL_S)
+
+        C.State._AFKConn = RunService.Heartbeat:Connect(function()
+            if not (C.State and C.State.AFK) then return end
+            local t = now()
+            if t < nextAt then return end
+            pcall(afkComboAction)
+            nextAt = t + nextJitteredIntervalSeconds(INPUT_BASE_INTERVAL_S)
+        end)
+    end
+
+    local function afkStop()
+        if C.State._AFKConn then
+            pcall(function() C.State._AFKConn:Disconnect() end)
+            C.State._AFKConn = nil
+        end
+    end
+
+    --========================
     -- Cleanup (module reload safety)
     --========================
     BAG.__cleanup = function()
@@ -300,6 +414,11 @@ return function(C, R, UI)
         end
 
         if infiniteJumpEnabled then stopInfJump() else disconnectConn(jumpConn); jumpConn = nil end
+
+        if C.State and C.State.AFK then
+            C.State.AFK = false
+        end
+        afkStop()
 
         cachedControlModule = nil
         cachedControlOk = false
@@ -370,8 +489,30 @@ return function(C, R, UI)
         end
     })
 
+    --========================
+    -- AFK switch (added at bottom of this script)
+    --========================
+    tab:Toggle({
+        Title = "AFK",
+        Value = (C.State.AFK == true),
+        Callback = function(state)
+            C.State.AFK = (state == true)
+            if C.State.AFK then
+                afkStart()
+            else
+                afkStop()
+            end
+        end
+    })
+
     if infiniteJumpEnabled then startInfJump() end
     if speedEnabled then setWalkSpeed(walkSpeedValue) end
+
+    if C.State.AFK then
+        afkStart()
+    else
+        afkStop()
+    end
 
     --========================
     -- Character lifecycle
