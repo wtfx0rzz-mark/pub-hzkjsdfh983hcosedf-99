@@ -6,6 +6,7 @@ return function(C, R, UI)
     local RunService = C.Services.RunService or game:GetService("RunService")
     local UIS        = C.Services.UIS        or game:GetService("UserInputService")
     local WS         = C.Services.WS         or game:GetService("Workspace")
+    local RS         = C.Services.RS         or game:GetService("ReplicatedStorage")
     local VIM        = C.Services.VIM        or game:GetService("VirtualInputManager")
     local VU         = C.Services.VU         or game:GetService("VirtualUser")
     local PPS        = C.Services.PPS        or game:GetService("ProximityPromptService")
@@ -374,6 +375,77 @@ return function(C, R, UI)
     end
 
     --=====================================================
+    -- Godmode (ported from auto.lua)
+    --=====================================================
+    local godOn = false
+    local godHB = nil
+    local godLastHealth = nil
+    local godRecentUntil = 0
+    local godHealthConn = nil
+    local godCharConn = nil
+    local GOD_POST_DAMAGE_WINDOW = 8.0
+    local GOD_POST_DAMAGE_INTERVAL = 1.5
+    local GOD_IDLE_INTERVAL = 15.0
+
+    local function fireGod()
+        local f = RS:FindFirstChild("RemoteEvents")
+        local ev = f and f:FindFirstChild("DamagePlayer")
+        if ev and ev:IsA("RemoteEvent") then
+            pcall(function() ev:FireServer(-math.huge) end)
+        end
+    end
+
+    local function bindGodToHumanoid()
+        disconnectConn(godHealthConn); godHealthConn = nil
+        local h = humanoid()
+        if not h then return end
+        godLastHealth = h.Health
+        godHealthConn = h.HealthChanged:Connect(function(newHealth)
+            if not godOn then return end
+            if typeof(newHealth) ~= "number" then return end
+            local last = godLastHealth
+            godLastHealth = newHealth
+            if last ~= nil and newHealth < last then
+                godRecentUntil = os.clock() + GOD_POST_DAMAGE_WINDOW
+                fireGod()
+                task.defer(fireGod)
+            end
+        end)
+    end
+
+    local function enableGod()
+        if godOn then return end
+        godOn = true
+        bindGodToHumanoid()
+        disconnectConn(godCharConn); godCharConn = nil
+        godCharConn = lp.CharacterAdded:Connect(function()
+            task.wait(0.15)
+            if godOn then bindGodToHumanoid() end
+        end)
+        disconnectConn(godHB); godHB = nil
+        local acc = 0
+        godHB = RunService.Heartbeat:Connect(function(dt)
+            if not godOn then return end
+            acc += dt
+            local nowT = os.clock()
+            local interval = (nowT <= godRecentUntil) and GOD_POST_DAMAGE_INTERVAL or GOD_IDLE_INTERVAL
+            if acc >= interval then
+                acc = 0
+                fireGod()
+            end
+        end)
+    end
+
+    local function disableGod()
+        godOn = false
+        disconnectConn(godHB); godHB = nil
+        disconnectConn(godHealthConn); godHealthConn = nil
+        disconnectConn(godCharConn); godCharConn = nil
+        godLastHealth = nil
+        godRecentUntil = 0
+    end
+
+    --=====================================================
     -- Auto Revive (Bandage/MedKit only)
     --=====================================================
     local AR_Enable = false
@@ -733,6 +805,8 @@ return function(C, R, UI)
         end
         afkStop()
 
+        disableGod()
+
         cachedControlModule = nil
         cachedControlOk = false
 
@@ -809,6 +883,13 @@ return function(C, R, UI)
             end
         end
     })
+    tab:Toggle({
+        Title = "Godmode",
+        Value = true,
+        Callback = function(state)
+            if state then enableGod() else disableGod() end
+        end
+    })
 
     tab:Divider()
     tab:Section({ Title = "Auto Revive", Icon = "heart" })
@@ -832,6 +913,7 @@ return function(C, R, UI)
     if infiniteJumpEnabled then startInfJump() end
     if speedEnabled then setWalkSpeed(walkSpeedValue) end
     if C.State.AFK then afkStart() else afkStop() end
+    enableGod()
 
     startHealingWatch()
     recomputeHealingAvailable()
@@ -859,6 +941,11 @@ return function(C, R, UI)
                     applyNoclipToCharacter(ch)
                     hookNoclipDescendants(ch)
                 end
+            end
+
+            if godOn then
+                task.wait(0.15)
+                bindGodToHumanoid()
             end
 
             recomputeHealingAvailable()
