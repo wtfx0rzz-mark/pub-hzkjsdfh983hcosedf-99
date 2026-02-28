@@ -730,10 +730,13 @@ return function(C, R, UI)
         local TreeHitSeed  = setmetatable({}, { __mode = "k" })
         local TreeLastHitAt = setmetatable({}, { __mode = "k" })
 
+        -- PATCHED: catch-all "TreeBig<digits>" anywhere in the name
         local function bt_isBigTreeName(n)
             if BIG_TREE_NAMES[n] then return true end
             if type(n) ~= "string" then return false end
-            if n:match("^TreeBig%d+$") ~= nil then return true end
+
+            if n:find("TreeBig%d+") then return true end
+
             return (n:match("^WebbedTreeBig%d*$") ~= nil)
                 or (n:match("^FairyTreeBig%d+$") ~= nil)
                 or (n:match("^Corrupted%s+TreeBig%d+$") ~= nil)
