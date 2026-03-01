@@ -143,9 +143,18 @@ do
     end))
 end
 
+-- PATCHED: detect Jungle via "Jungle Temple" landmark (same as the other main module)
 local function findBiomeName()
     local WS = C.Services.WS or game:GetService("Workspace")
     local map = WS:FindFirstChild("Map")
+
+    local landmarks = map and map:FindFirstChild("Landmarks")
+    if landmarks then
+        if landmarks:FindFirstChild("Jungle Temple") or landmarks:FindFirstChild("JungleTemple") then
+            return "Jungle"
+        end
+    end
+
     local biomes = map and map:FindFirstChild("Biomes")
     if not biomes then return "Unknown (Biomes folder missing)" end
     if biomes:FindFirstChild("Volcanic") then return "Volcanic" end
