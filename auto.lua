@@ -1150,6 +1150,129 @@ return function(C, R, UI)
         end
         tab:Toggle({ Title = "Hide Big Trees (Local)", Value = false, Callback = function(state) if state then enableHideBigTrees() else disableHideBigTrees() end end })
 
+        local COIN_STATE = {
+            Radius = 75,
+            ScanInterval = 0.15,
+            FireCooldown = 0.35,
+            MaxPerScan = 8,
+        }
+        local lastCoinFireAt = setmetatable({}, { __mode = "k" })
+
+        local function coinNow() return os.clock() end
+        local function coinItemsFolder()
+            return WS:FindFirstChild("Items") or WS
+        end
+        local function coinTopModelUnderItems(part, items)
+            local cur = part
+            local lastModel = nil
+            while cur and cur ~= WS and cur ~= items do
+                if cur:IsA("Model") then lastModel = cur end
+                cur = cur.Parent
+            end
+            return lastModel
+        end
+        local function coinResolveTopModelFromPart(part)
+            if not (part and part.Parent) then return nil end
+            local items = coinItemsFolder()
+            local m = coinTopModelUnderItems(part, items)
+            if m and m.Parent and (not items or m:IsDescendantOf(items)) then
+                return m
+            end
+            local anc = part:FindFirstAncestorOfClass("Model")
+            if anc and anc.Parent and (not items or anc:IsDescendantOf(items)) then
+                return anc
+            end
+            if part:IsA("Model") then return part end
+            return nil
+        end
+        local function getCollectCointsRemote()
+            local re = RS:FindFirstChild("RemoteEvents")
+            if not re then return nil end
+            return re:FindFirstChild("RequestCollectCoints")
+        end
+        local collectCointsRemote = getCollectCointsRemote()
+
+        local function invokeCollect(remote, a1)
+            if not (remote and remote.Parent) then return false end
+            if not (a1 and a1.Parent) then return false end
+            local ok = pcall(function()
+                remote:InvokeServer(a1)
+            end)
+            return ok
+        end
+        local function shouldFireCoin(inst)
+            local lt = lastCoinFireAt[inst]
+            if lt and (coinNow() - lt) < COIN_STATE.FireCooldown then return false end
+            lastCoinFireAt[inst] = coinNow()
+            return true
+        end
+        local function isCoinModel(m)
+            return m and m.Parent and m:IsA("Model") and m.Name == "Coin Stack"
+        end
+
+        local function coinScanOnce()
+            local root = hrp()
+            if not root then return end
+
+            if not collectCointsRemote or not collectCointsRemote.Parent then
+                collectCointsRemote = getCollectCointsRemote()
+            end
+            if not (collectCointsRemote and collectCointsRemote.Parent) then return end
+
+            local center = root.Position
+            local params = OverlapParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { lp.Character }
+
+            local parts = WS:GetPartBoundsInRadius(center, COIN_STATE.Radius, params) or {}
+            local uniq = {}
+            local fired = 0
+
+            for _, p in ipairs(parts) do
+                if fired >= COIN_STATE.MaxPerScan then break end
+                if p:IsA("BasePart") then
+                    local m = coinResolveTopModelFromPart(p)
+                    if m and isCoinModel(m) and not uniq[m] then
+                        uniq[m] = true
+                        if shouldFireCoin(m) then
+                            if invokeCollect(collectCointsRemote, m) then
+                                fired += 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        local coinOn = true
+        local coinConn, coinAcc = nil, 0
+
+        local function enableCoin()
+            if coinConn then return end
+            coinOn = true
+            coinAcc = 0
+            coinConn = Run.Heartbeat:Connect(function(dt)
+                coinAcc += dt
+                if coinAcc < COIN_STATE.ScanInterval then return end
+                coinAcc = 0
+                pcall(coinScanOnce)
+            end)
+        end
+
+        local function disableCoin()
+            coinOn = false
+            if coinConn then coinConn:Disconnect(); coinConn = nil end
+        end
+
+        tab:Toggle({
+            Title = "Auto Collect Coins",
+            Value = true,
+            Callback = function(state)
+                if state then enableCoin() else disableCoin() end
+            end
+        })
+        if coinOn then enableCoin() end
+
         local noPauseOn, prevPauseMode
         local function enableNoStreamingPause()
             if noPauseOn then return end
@@ -1359,6 +1482,7 @@ return function(C, R, UI)
             if noShadowsOn and not lightConn then enableNoShadows() end
             if loadDefenseOnDefault then enableLoadDefenseSafe() end
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
+            if coinOn and not coinConn then enableCoin() end
             if chestFinderOn and enableChestFinder then enableChestFinder() end
             if autoLostEnabled then
                 task.wait(0.15)
