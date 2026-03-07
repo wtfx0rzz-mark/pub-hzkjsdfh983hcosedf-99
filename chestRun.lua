@@ -57,6 +57,18 @@ return function(C, R, UI)
         return nil
     end
 
+    local function pivotAny(inst, cf)
+        if not (inst and inst.Parent) then return end
+        if inst:IsA("Model") then
+            pcall(function() inst:PivotTo(cf) end)
+            return
+        end
+        local p = mainPart(inst)
+        if p then
+            pcall(function() p.CFrame = cf end)
+        end
+    end
+
     local function modelWorldPos(m)
         if not (m and m.Parent) then return nil end
         local mp = mainPart(m)
@@ -83,6 +95,11 @@ return function(C, R, UI)
         return nil
     end
 
+    local function isUnderItems(inst, itemsRoot)
+        if not (inst and inst.Parent and itemsRoot and itemsRoot.Parent) then return false end
+        return inst == itemsRoot or inst:IsDescendantOf(itemsRoot)
+    end
+
     local function isChestName(n)
         if type(n) ~= "string" then return false end
         return n:match("Chest%d*$") ~= nil or n:match("Chest$") ~= nil
@@ -94,8 +111,7 @@ return function(C, R, UI)
     end
 
     local function isHalloweenChestName(n)
-        if type(n) ~= "string" then return false end
-        return (n == "Halloween Chest") or (n:match("^Halloween Chest%d+$") ~= nil)
+        return false
     end
 
     local function getRemote(...)
@@ -115,6 +131,13 @@ return function(C, R, UI)
     local CHEST_RETRY_WAIT_SECONDS = 2.0
     local CHEST_CONFIRM_POLL_INTERVAL = 0.10
     local AUTO_STOP_IF_EMPTY_SECONDS = 8.0
+    local CHEST_COLLECT_WINDOW_SECONDS = 1.0
+    local CHEST_COLLECT_POLL_INTERVAL = 0.08
+    local CHEST_FAST_POLL_INTERVAL = 0.03
+    local CHEST_FAST_POLL_DURATION = 0.60
+    local CHEST_QUIET_GRACE_SECONDS = 0.35
+    local CHEST_MAX_COLLECT_WINDOW_SECONDS = 3.0
+    local CHEST_CAPTURE_MAX_PER_POLL = 180
 
     C.State.ChestWaitAfterTeleportBeforeOpen = CHEST_WAIT_AFTER_TELEPORT_BEFORE_OPEN
     C.State.ChestOpenConfirmTimeoutSeconds = CHEST_OPEN_CONFIRM_TIMEOUT_SECONDS
@@ -138,6 +161,29 @@ return function(C, R, UI)
     local FRONT_DIST = 4.0
     local STAND_UP = 2.5
     local CHEST_FLOOR_RAY_DEPTH = 80.0
+    local CHEST_LOOT_RAY_UP_DISTANCE = 38.0
+    local CHEST_LOOT_RAY_START_PAD = 0.40
+    local CHEST_LOOT_RAY_OFF = 1.05
+    local CHEST_LOOT_RAY_OFFSETS = {
+        Vector3.new(0, 0, 0),
+        Vector3.new( CHEST_LOOT_RAY_OFF, 0, 0),
+        Vector3.new(-CHEST_LOOT_RAY_OFF, 0, 0),
+        Vector3.new(0, 0,  CHEST_LOOT_RAY_OFF),
+        Vector3.new(0, 0, -CHEST_LOOT_RAY_OFF),
+        Vector3.new( CHEST_LOOT_RAY_OFF, 0,  CHEST_LOOT_RAY_OFF),
+        Vector3.new( CHEST_LOOT_RAY_OFF, 0, -CHEST_LOOT_RAY_OFF),
+        Vector3.new(-CHEST_LOOT_RAY_OFF, 0,  CHEST_LOOT_RAY_OFF),
+        Vector3.new(-CHEST_LOOT_RAY_OFF, 0, -CHEST_LOOT_RAY_OFF),
+    }
+
+    local CHEST_FWD_WALL_RAY_DISTANCE = 42.0
+    local CHEST_FWD_WALL_COLS = 9
+    local CHEST_FWD_WALL_ROWS = 7
+    local CHEST_FWD_WALL_HALF_WIDTH = 8.0
+    local CHEST_FWD_WALL_HALF_HEIGHT = 5.0
+    local CHEST_FWD_WALL_START_AHEAD = 1.25
+    local CHEST_FWD_WALL_START_UP = 2.0
+    local CHEST_FWD_WALL_MAX_RAYS = 90
 
     local function makeChestRayParams(extras)
         local params = RaycastParams.new()
@@ -153,6 +199,26 @@ return function(C, R, UI)
             local fol = map:FindFirstChild("Foliage")
             if fol then table.insert(ex, fol) end
         end
+
+        if extras then
+            for i = 1, #extras do
+                local v = extras[i]
+                if v then table.insert(ex, v) end
+            end
+        end
+
+        params.FilterDescendantsInstances = ex
+        return params
+    end
+
+    local function makeLootRayParams(extras)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.IgnoreWater = true
+
+        local ex = { lp.Character }
+        local map = WS:FindFirstChild("Map")
+        if map then table.insert(ex, map) end
 
         if extras then
             for i = 1, #extras do
@@ -365,12 +431,466 @@ return function(C, R, UI)
         return true
     end
 
+    local refreshDragRemotes
+    local RF_Start = nil
+    local RF_Stop = nil
+    refreshDragRemotes = function()
+        RF_Start = getRemote("RequestStartDraggingItem", "StartDraggingItem")
+        RF_Stop  = getRemote("RequestStopDraggingItem", "StopDraggingItem", "StopDraggingItemRemote")
+    end
+    refreshDragRemotes()
+
+    local function setNoCollideAny(inst, on)
+        if not (inst and inst.Parent) then return end
+        if inst:IsA("BasePart") then
+            inst.CanCollide = not on
+            inst.CanQuery = not on
+            inst.CanTouch = not on
+            inst.Massless = on and true or false
+            inst.AssemblyLinearVelocity = Vector3.new()
+            inst.AssemblyAngularVelocity = Vector3.new()
+            return
+        end
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.CanCollide = not on
+                d.CanQuery = not on
+                d.CanTouch = not on
+                d.Massless = on and true or false
+                d.AssemblyLinearVelocity = Vector3.new()
+                d.AssemblyAngularVelocity = Vector3.new()
+            end
+        end
+    end
+
+    local function setAnchoredAny(inst, on)
+        if not (inst and inst.Parent) then return end
+        if inst:IsA("BasePart") then
+            inst.Anchored = on
+            return
+        end
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("BasePart") then d.Anchored = on end
+        end
+    end
+
+    local DRAG_TTL = 60.0
+    local DragActive = {}
+
+    local function safeStopDrag(m)
+        if not (m and RF_Stop) then return false end
+        return pcall(function() RF_Stop:FireServer(m) end)
+    end
+
+    local function finallyStopDrag(m)
+        task.delay(0.05, function() pcall(safeStopDrag, m) end)
+        task.delay(0.20, function() pcall(safeStopDrag, m) end)
+        task.delay(0.45, function() pcall(safeStopDrag, m) end)
+    end
+
+    local function dragUntrack(m)
+        local rec = DragActive[m]
+        if not rec then return end
+        DragActive[m] = nil
+        for _, c in ipairs(rec.conns) do pcall(function() c:Disconnect() end) end
+    end
+
+    local function dragTrackRelease(m)
+        local rec = DragActive[m]
+        if not rec then return end
+        DragActive[m] = nil
+        for _, c in ipairs(rec.conns) do pcall(function() c:Disconnect() end) end
+        safeStopDrag(m)
+    end
+
+    local function dragStart(m)
+        if not (m and m.Parent and RF_Start) then return false end
+        if DragActive[m] then
+            DragActive[m].t0 = os.clock()
+            return true
+        end
+        local ok = pcall(function() RF_Start:FireServer(m) end)
+        if not ok then return false end
+        local c = {}
+        c[#c + 1] = m.AncestryChanged:Connect(function(_, parent)
+            if not parent then dragTrackRelease(m) end
+        end)
+        c[#c + 1] = m:GetPropertyChangedSignal("Parent"):Connect(function()
+            if not m.Parent then dragTrackRelease(m) end
+        end)
+        DragActive[m] = { t0 = os.clock(), conns = c }
+        return true
+    end
+
+    local function dragKeepAlive(m)
+        local rec = DragActive[m]
+        if rec then rec.t0 = os.clock() end
+    end
+
+    bind(RunService.Heartbeat:Connect(function()
+        local now = os.clock()
+        for m, rec in pairs(DragActive) do
+            if (not m) or (not m.Parent) or (now - rec.t0) > DRAG_TTL then
+                dragTrackRelease(m)
+            end
+        end
+    end))
+
+    local overlapParams = OverlapParams.new()
+    overlapParams.MaxParts = 1000
+
+    local function refreshOverlapFilter()
+        local items = itemsFolder()
+        if items and items.Parent then
+            overlapParams.FilterType = Enum.RaycastFilterType.Include
+            overlapParams.FilterDescendantsInstances = { items }
+        else
+            overlapParams.FilterType = Enum.RaycastFilterType.Include
+            overlapParams.FilterDescendantsInstances = {}
+        end
+    end
+    refreshOverlapFilter()
+
+    local function topModelUnderItems(part, itemsRoot)
+        local cur = part
+        local lastModel = nil
+        while cur and cur ~= WS and cur ~= itemsRoot do
+            if cur:IsA("Model") then lastModel = cur end
+            cur = cur.Parent
+        end
+        if lastModel and itemsRoot and lastModel.Parent == itemsRoot then return lastModel end
+        return lastModel
+    end
+
+    local function itemKey(inst)
+        return inst
+    end
+
+    local function isChestInst(inst)
+        return inst and inst.Parent and inst:IsA("Model") and isChestName(inst.Name)
+    end
+
+    local CapturedSet = {}
+    local CapturedList = {}
+
+    local HOLD_OFFSET_Y = 10
+    local HOLD_FORWARD = 1.5
+    local HOLD_CLUSTER_RADIUS_MIN = 0.75
+    local HOLD_CLUSTER_RADIUS_STEP = 0.08
+    local HOLD_CLUSTER_RADIUS_MAX = 2.35
+    local HOLD_WAVE_AMPLITUDE = 0.25
+    local HOLD_WAVE_FREQUENCY = 1.35
+    local HOLD_GOLDEN_ANGLE = 2.399963229728653
+
+    local hoverConn = nil
+    local function hoverFollow()
+        local root = hrp()
+        if not root then return end
+        local forward = root.CFrame.LookVector
+        local right = root.CFrame.RightVector
+        local basePos = root.Position + Vector3.new(0, HOLD_OFFSET_Y, 0) + forward * HOLD_FORWARD
+
+        for i = #CapturedList, 1, -1 do
+            local m = CapturedList[i]
+            if m and m.Parent then
+                dragKeepAlive(m)
+                setAnchoredAny(m, true)
+
+                local idx = i
+                local a = idx * HOLD_GOLDEN_ANGLE
+                local r = math.min(HOLD_CLUSTER_RADIUS_MIN + HOLD_CLUSTER_RADIUS_STEP * (idx - 1), HOLD_CLUSTER_RADIUS_MAX)
+                local waveY = math.sin((os.clock() * HOLD_WAVE_FREQUENCY) + idx) * HOLD_WAVE_AMPLITUDE
+                local off = (right * math.cos(a) + forward * math.sin(a)) * r + Vector3.new(0, waveY, 0)
+
+                local pos = basePos + off
+                local cf = CFrame.lookAt(pos, pos + forward)
+                pivotAny(m, cf)
+            else
+                CapturedSet[m] = nil
+                table.remove(CapturedList, i)
+            end
+        end
+
+        if #CapturedList == 0 then
+            if hoverConn then pcall(function() hoverConn:Disconnect() end) end
+            hoverConn = nil
+        end
+    end
+
+    local function ensureHoverOn()
+        if hoverConn then return end
+        hoverConn = RunService.RenderStepped:Connect(hoverFollow)
+    end
+
+    local function ensureHoverOff()
+        if hoverConn then pcall(function() hoverConn:Disconnect() end) end
+        hoverConn = nil
+    end
+
+    local function addCaptured(m)
+        if CapturedSet[m] then return end
+        CapturedSet[m] = true
+        CapturedList[#CapturedList + 1] = m
+        ensureHoverOn()
+    end
+
+    local function releaseAllCaptured()
+        ensureHoverOff()
+        for i = #CapturedList, 1, -1 do
+            local m = CapturedList[i]
+            if m and m.Parent then
+                setAnchoredAny(m, false)
+                setNoCollideAny(m, false)
+                finallyStopDrag(m)
+                dragUntrack(m)
+            end
+            CapturedSet[m] = nil
+            table.remove(CapturedList, i)
+        end
+        table.clear(CapturedList)
+        for k, _ in pairs(CapturedSet) do CapturedSet[k] = nil end
+    end
+
+    local function captureInst(inst)
+        if not (inst and inst.Parent) then return false end
+
+        local itemsRoot = itemsFolder()
+        if not (itemsRoot and isUnderItems(inst, itemsRoot)) then return false end
+
+        if CapturedSet[inst] then return false end
+        if isChestInst(inst) then return false end
+
+        refreshDragRemotes()
+        if not dragStart(inst) then return false end
+        task.wait(0.06)
+        setNoCollideAny(inst, true)
+        setAnchoredAny(inst, true)
+        addCaptured(inst)
+        return true
+    end
+
+    local function getCandidatesNear(pos, rad)
+        local items = itemsFolder()
+        if not (items and pos and rad) then return {} end
+        refreshOverlapFilter()
+        local ok, parts = pcall(function()
+            return WS:GetPartBoundsInRadius(pos, rad, overlapParams)
+        end)
+        local out = {}
+        local seen = {}
+
+        local function push(inst)
+            if not (inst and inst.Parent) then return end
+            if not isUnderItems(inst, items) then return end
+            if isChestInst(inst) then return end
+            if isSnowChestName(inst.Name) or isHalloweenChestName(inst.Name) then return end
+            if seen[inst] then return end
+            seen[inst] = true
+            out[#out + 1] = inst
+        end
+
+        if ok and type(parts) == "table" then
+            for _, p in ipairs(parts) do
+                if p and p.Parent and p:IsDescendantOf(items) then
+                    local m = topModelUnderItems(p, items) or p
+                    if m and m.Parent and (m:IsA("Model") or m:IsA("BasePart")) then
+                        push(m)
+                    end
+                end
+            end
+        end
+
+        if #out == 0 then
+            for _, ch in ipairs(items:GetChildren()) do
+                if (ch:IsA("Model") or ch:IsA("BasePart")) and ch.Parent then
+                    local mp = mainPart(ch)
+                    if mp then
+                        if (mp.Position - pos).Magnitude <= rad then
+                            push(ch)
+                        end
+                    end
+                end
+            end
+        end
+
+        return out
+    end
+
+    local function snapshotNearChest(chestPos, rad)
+        local set = {}
+        local list = getCandidatesNear(chestPos, rad)
+        for i = 1, #list do
+            set[itemKey(list[i])] = true
+        end
+        return set
+    end
+
+    local function lootRaycastCandidates(chest)
+        if not (chest and chest.Parent and chest:IsA("Model")) then return {} end
+        local mp = mainPart(chest)
+        if not mp then return {} end
+
+        local itemsRoot = itemsFolder()
+        if not (itemsRoot and itemsRoot.Parent) then return {} end
+
+        local chestCenter = mp.Position
+        local chestTopY = mp.Position.Y + (mp.Size.Y * 0.5)
+        local params = makeLootRayParams({ chest })
+        local out = {}
+        local seen = {}
+
+        for i = 1, #CHEST_LOOT_RAY_OFFSETS do
+            local off = CHEST_LOOT_RAY_OFFSETS[i]
+            local start = Vector3.new(chestCenter.X + off.X, chestTopY + CHEST_LOOT_RAY_START_PAD, chestCenter.Z + off.Z)
+            local hit = WS:Raycast(start, Vector3.new(0, CHEST_LOOT_RAY_UP_DISTANCE, 0), params)
+            if hit and hit.Instance and hit.Instance.Parent and hit.Instance:IsDescendantOf(itemsRoot) then
+                local part = hit.Instance
+                local cand = topModelUnderItems(part, itemsRoot) or part
+                if cand and cand.Parent and (not seen[cand]) and isUnderItems(cand, itemsRoot) then
+                    if not isChestInst(cand) then
+                        seen[cand] = true
+                        out[#out + 1] = cand
+                    end
+                end
+            end
+        end
+
+        return out
+    end
+
+    local function forwardWallRaycastCandidates(chest)
+        local root = hrp()
+        if not root then return {} end
+
+        local itemsRoot = itemsFolder()
+        if not (itemsRoot and itemsRoot.Parent) then return {} end
+
+        local params = makeLootRayParams({ chest })
+        local out = {}
+        local seen = {}
+
+        local chestPos = (chest and chest.Parent) and modelWorldPos(chest) or nil
+        local capRad = math.max(tonumber(C.State.ChestCaptureRadius) or 22.0, (tonumber(C.State.ChestSpawnRadius) or 10.0) + 12.0)
+
+        local forward = root.CFrame.LookVector
+        local right = root.CFrame.RightVector
+        local up = root.CFrame.UpVector
+        local base = root.Position + forward * CHEST_FWD_WALL_START_AHEAD + Vector3.new(0, CHEST_FWD_WALL_START_UP, 0)
+
+        local cols = math.max(1, tonumber(CHEST_FWD_WALL_COLS) or 1)
+        local rows = math.max(1, tonumber(CHEST_FWD_WALL_ROWS) or 1)
+        local dx = (cols > 1) and ((CHEST_FWD_WALL_HALF_WIDTH * 2) / (cols - 1)) or 0
+        local dy = (rows > 1) and ((CHEST_FWD_WALL_HALF_HEIGHT * 2) / (rows - 1)) or 0
+
+        local rayCount = 0
+        for r = 0, rows - 1 do
+            local y = -CHEST_FWD_WALL_HALF_HEIGHT + (dy * r)
+            for c = 0, cols - 1 do
+                rayCount += 1
+                if rayCount > CHEST_FWD_WALL_MAX_RAYS then break end
+
+                local x = -CHEST_FWD_WALL_HALF_WIDTH + (dx * c)
+                local start = base + right * x + up * y
+                local hit = WS:Raycast(start, forward * CHEST_FWD_WALL_RAY_DISTANCE, params)
+
+                if hit and hit.Instance and hit.Instance.Parent and hit.Instance:IsDescendantOf(itemsRoot) then
+                    local part = hit.Instance
+                    local cand = topModelUnderItems(part, itemsRoot) or part
+
+                    if cand and cand.Parent and (not seen[cand]) and isUnderItems(cand, itemsRoot) and (not isChestInst(cand)) then
+                        local candPos = nil
+                        if cand:IsA("BasePart") then
+                            candPos = cand.Position
+                        else
+                            candPos = modelWorldPos(cand)
+                        end
+
+                        local okNear = true
+                        if candPos and chestPos then
+                            okNear = ((candPos - chestPos).Magnitude <= capRad)
+                        elseif candPos then
+                            okNear = ((candPos - root.Position).Magnitude <= capRad)
+                        end
+
+                        if okNear then
+                            seen[cand] = true
+                            out[#out + 1] = cand
+                        end
+                    end
+                end
+            end
+            if rayCount > CHEST_FWD_WALL_MAX_RAYS then break end
+        end
+
+        return out
+    end
+
+    local function processNewCandidates(cands, preSet, maxCount)
+        local didAny = 0
+        for i = 1, #cands do
+            local inst = cands[i]
+            if inst and inst.Parent and (not isChestInst(inst)) then
+                local k = itemKey(inst)
+                if not (preSet and preSet[k]) then
+                    local did = false
+                    if not CapturedSet[inst] then
+                        if captureInst(inst) then
+                            did = true
+                        end
+                    end
+                    if did then
+                        if preSet then preSet[k] = true end
+                        didAny += 1
+                        if maxCount and didAny >= maxCount then break end
+                    end
+                end
+            end
+        end
+        return didAny
+    end
+
+    local function processRaycastNewLoot(chest, preSet, maxCount)
+        local cands = lootRaycastCandidates(chest)
+
+        local wall = forwardWallRaycastCandidates(chest)
+        if #wall > 0 then
+            local seen = {}
+            for i = 1, #cands do
+                local v = cands[i]
+                if v then seen[v] = true end
+            end
+            for i = 1, #wall do
+                local inst = wall[i]
+                if inst and (not seen[inst]) then
+                    cands[#cands + 1] = inst
+                    seen[inst] = true
+                end
+            end
+        end
+
+        return processNewCandidates(cands, preSet, maxCount)
+    end
+
+    local function processNewSinceSnapshot(pos, rad, preSet, maxCount)
+        local cands = getCandidatesNear(pos, rad)
+        return processNewCandidates(cands, preSet, maxCount)
+    end
+
     local function openChestOnce(chest)
         if not (chest and chest.Parent) then return false end
         if EXCLUDE_NAMES[chest.Name] or isSnowChestName(chest.Name) or isHalloweenChestName(chest.Name) then
             pcall(function() chest:SetAttribute(UID_OPEN_KEY, true) end)
             return false
         end
+
+        local pos = modelWorldPos(chest)
+        if not pos then
+            pcall(function() chest:SetAttribute(UID_OPEN_KEY, true) end)
+            return false
+        end
+
+        local snapRad = math.max(math.max(tonumber(C.State.ChestCaptureRadius) or 22.0, tonumber(C.State.ChestSpawnRadius) or 10.0) + 16.0, 18.0)
+        local preSet = snapshotNearChest(pos, snapRad)
 
         local prompt = findChestPromptPreferred(chest)
         if not prompt then
@@ -382,20 +902,97 @@ return function(C, R, UI)
             return false
         end
 
+        local opened = false
+        local gotAny = false
+
+        local confirmTimeout = math.max(CHEST_OPEN_CONFIRM_TIMEOUT_SECONDS, 0.5)
+        local spawnRadius = math.max(tonumber(C.State.ChestSpawnRadius) or 10.0, 2.0)
+        local captureRadius = math.max(tonumber(C.State.ChestCaptureRadius) or 22.0, spawnRadius + 12.0)
+        local captureWindowMin = math.max(CHEST_COLLECT_WINDOW_SECONDS, 0.05)
+        local captureWindowMax = math.max(CHEST_MAX_COLLECT_WINDOW_SECONDS, captureWindowMin)
+
         local t0 = os.clock()
-        while alive and chest and chest.Parent and (os.clock() - t0) <= CHEST_OPEN_CONFIRM_TIMEOUT_SECONDS do
-            if chestOpened(chest) then
-                return true
+        local tConfirmEnd = t0 + confirmTimeout
+
+        while alive and chest and chest.Parent and os.clock() <= tConfirmEnd do
+            local chestPos = modelWorldPos(chest)
+            if chestPos then
+                local cap = processNewSinceSnapshot(chestPos, captureRadius, preSet, CHEST_CAPTURE_MAX_PER_POLL)
+                if cap > 0 then
+                    gotAny = true
+                    opened = true
+                    break
+                end
             end
+
+            local rayCap = processRaycastNewLoot(chest, preSet, CHEST_CAPTURE_MAX_PER_POLL)
+            if rayCap > 0 then
+                gotAny = true
+                opened = true
+                break
+            end
+
+            if chestOpened(chest) then
+                opened = true
+                break
+            end
+
             local p = findChestPromptPreferred(chest)
             if not (p and p.Parent) then
-                pcall(function() chest:SetAttribute(UID_OPEN_KEY, true) end)
-                return true
+                opened = true
+                break
             end
-            task.wait(CHEST_CONFIRM_POLL_INTERVAL)
+
+            local dt = os.clock() - t0
+            local waitT = (dt <= CHEST_FAST_POLL_DURATION) and CHEST_FAST_POLL_INTERVAL or CHEST_CONFIRM_POLL_INTERVAL
+            task.wait(waitT)
         end
 
-        return false
+        if not opened then
+            return false
+        end
+
+        local tOpen = os.clock()
+        local tMinEnd = tOpen + captureWindowMin
+        local tMaxEnd = tOpen + captureWindowMax
+        local lastNewAt = tOpen
+
+        while alive and chest and chest.Parent and os.clock() <= tMaxEnd do
+            local chestPos = modelWorldPos(chest)
+            if chestPos then
+                local cap = processNewSinceSnapshot(chestPos, captureRadius, preSet, CHEST_CAPTURE_MAX_PER_POLL)
+                if cap > 0 then
+                    gotAny = true
+                    lastNewAt = os.clock()
+                end
+            end
+
+            local rayCap = processRaycastNewLoot(chest, preSet, CHEST_CAPTURE_MAX_PER_POLL)
+            if rayCap > 0 then
+                gotAny = true
+                lastNewAt = os.clock()
+            end
+
+            local now = os.clock()
+            if now >= tMinEnd and (now - lastNewAt) >= CHEST_QUIET_GRACE_SECONDS then
+                break
+            end
+
+            local dt = now - tOpen
+            local waitT = (dt <= CHEST_FAST_POLL_DURATION) and CHEST_FAST_POLL_INTERVAL or CHEST_COLLECT_POLL_INTERVAL
+            task.wait(waitT)
+        end
+
+        local chestPos = modelWorldPos(chest)
+        if chestPos then
+            local cap = processNewSinceSnapshot(chestPos, captureRadius, preSet, CHEST_CAPTURE_MAX_PER_POLL)
+            if cap > 0 then gotAny = true end
+        end
+        local rayCapFinal = processRaycastNewLoot(chest, preSet, CHEST_CAPTURE_MAX_PER_POLL)
+        if rayCapFinal > 0 then gotAny = true end
+
+        pcall(function() chest:SetAttribute(UID_OPEN_KEY, true) end)
+        return true, gotAny
     end
 
     local attemptedAt = setmetatable({}, { __mode = "k" })
@@ -772,8 +1369,21 @@ return function(C, R, UI)
         end
     })
 
+    ChestRunTab:Button({
+        Title = "Drop Captured Loot",
+        Callback = function()
+            releaseAllCaptured()
+        end
+    })
+
     bind(lp.CharacterAdded:Connect(function()
         task.wait(0.25)
+        refreshOverlapFilter()
+        if #CapturedList > 0 then
+            ensureHoverOn()
+        else
+            ensureHoverOff()
+        end
         if runOn then
             setSkipGuiVisible(true)
         else
@@ -786,11 +1396,13 @@ return function(C, R, UI)
         alive = false
         stopRun()
         stopTracking()
+        releaseAllCaptured()
         for i = 1, #conns do
             local c = conns[i]
             if c and c.Disconnect then pcall(function() c:Disconnect() end) end
         end
         conns = {}
+        ensureHoverOff()
         if skipGui and skipGui.Parent then pcall(function() skipGui:Destroy() end) end
         skipGui = nil
         skipBtn = nil
