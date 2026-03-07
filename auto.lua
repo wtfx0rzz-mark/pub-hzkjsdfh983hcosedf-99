@@ -1114,6 +1114,88 @@ return function(C, R, UI)
         local cam = WS.CurrentCamera
         WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function() cam = WS.CurrentCamera end)
 
+        local removeFogOn = false
+        local fogConn = nil
+        local fogOrig = nil
+        local atmoOrig = setmetatable({}, { __mode = "k" })
+
+        local function captureFogOriginal()
+            if fogOrig then return end
+            fogOrig = {
+                FogStart = Lighting.FogStart,
+                FogEnd   = Lighting.FogEnd,
+                FogColor = Lighting.FogColor,
+            }
+        end
+
+        local function touchAtmosphere(inst)
+            if not inst or not inst:IsA("Atmosphere") then return end
+            if not atmoOrig[inst] then
+                atmoOrig[inst] = {
+                    Density = inst.Density,
+                    Haze    = inst.Haze,
+                    Glare   = inst.Glare,
+                }
+            end
+            inst.Density = 0
+            inst.Haze = 0
+            inst.Glare = 0
+        end
+
+        local function applyNoFog()
+            Lighting.FogStart = 1e6
+            Lighting.FogEnd = 1e6 + 1
+            for _, d in ipairs(Lighting:GetDescendants()) do
+                touchAtmosphere(d)
+            end
+        end
+
+        local function enableRemoveFog()
+            if removeFogOn then return end
+            removeFogOn = true
+            captureFogOriginal()
+            applyNoFog()
+            if fogConn then fogConn:Disconnect() end
+            fogConn = Run.Heartbeat:Connect(function()
+                if not removeFogOn then return end
+                applyNoFog()
+            end)
+        end
+
+        local function disableRemoveFog()
+            removeFogOn = false
+            if fogConn then fogConn:Disconnect() fogConn = nil end
+            if fogOrig then
+                pcall(function()
+                    Lighting.FogStart = fogOrig.FogStart
+                    Lighting.FogEnd   = fogOrig.FogEnd
+                    Lighting.FogColor = fogOrig.FogColor
+                end)
+            end
+            for inst, orig in pairs(atmoOrig) do
+                if inst and inst.Parent then
+                    pcall(function()
+                        inst.Density = orig.Density
+                        inst.Haze    = orig.Haze
+                        inst.Glare   = orig.Glare
+                    end)
+                end
+            end
+        end
+
+        tab:Toggle({
+            Title = "Remove Fog",
+            Value = true,
+            Callback = function(state)
+                if state then
+                    enableRemoveFog()
+                else
+                    disableRemoveFog()
+                end
+            end
+        })
+        task.defer(enableRemoveFog)
+
         local function isBigTreeName(n)
             if not n then return false end
             if n == "TreeBig1" or n == "TreeBig2" or n == "TreeBig3" then return true end
@@ -1480,6 +1562,7 @@ return function(C, R, UI)
             if campBtn then campBtn.Visible = showCampEdge end
             lostBtn.Visible = false
             if noShadowsOn and not lightConn then enableNoShadows() end
+            if removeFogOn and not fogConn then enableRemoveFog() end
             if loadDefenseOnDefault then enableLoadDefenseSafe() end
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if coinOn and not coinConn then enableCoin() end
