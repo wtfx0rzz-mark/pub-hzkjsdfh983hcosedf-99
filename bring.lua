@@ -71,8 +71,11 @@ return function(C, R, UI)
     for _,n in ipairs(fuelItems) do fuelSet[n] = true end
     for _,n in ipairs(junkItems) do junkSet[n] = true end
     for _,n in ipairs(foodItems) do if n ~= "Rotten" then foodSet[n] = true end end
-    cookSet["Morsel"] = true; cookSet["Steak"] = true; cookSet["Ribs"] = true
-    scrapAlso["Log"] = true;  scrapAlso["Chair"] = true
+    cookSet["Morsel"] = true
+    cookSet["Steak"] = true
+    cookSet["Ribs"] = true
+    scrapAlso["Log"] = true
+    scrapAlso["Chair"] = true
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
 
@@ -86,15 +89,18 @@ return function(C, R, UI)
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
         return ch and ch:FindFirstChild("HumanoidRootPart")
     end
+
     local function headPart()
         local ch = Players.LocalPlayer.Character
         return ch and ch:FindFirstChild("Head")
     end
+
     local function isWallVariant(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or ""):lower()
         return n == "logwall" or n == "log wall" or (n:find("log",1,true) and n:find("wall",1,true))
     end
+
     local function isUnderLogWall(inst)
         local cur = inst
         while cur and cur ~= WS do
@@ -106,10 +112,12 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function hasHumanoid(model)
         if not (model and model:IsA("Model")) then return false end
         return model:FindFirstChildOfClass("Humanoid") ~= nil
     end
+
     local function isExcludedModel(m)
         if not (m and m:IsA("Model")) then return false end
         local n = (m.Name or ""):lower()
@@ -119,6 +127,7 @@ return function(C, R, UI)
         if isUnderLogWall(m) then return true end
         return false
     end
+
     local function mainPart(obj)
         if not obj or not obj.Parent then return nil end
         if obj:IsA("BasePart") then return obj end
@@ -128,6 +137,7 @@ return function(C, R, UI)
         end
         return nil
     end
+
     local function physicalRootPart(model)
         if not (model and model.Parent) then return nil end
         if model:IsA("BasePart") then return model end
@@ -137,6 +147,7 @@ return function(C, R, UI)
         if model.PrimaryPart then return model.PrimaryPart end
         return model:FindFirstChildWhichIsA("BasePart", true)
     end
+
     local function getAllParts(target)
         local t = {}
         if not target then return t end
@@ -149,6 +160,7 @@ return function(C, R, UI)
         end
         return t
     end
+
     local function bboxHeight(model)
         local rp = physicalRootPart(model)
         if rp then return rp.Size.Y end
@@ -186,10 +198,15 @@ return function(C, R, UI)
     end
 
     local function getRemote(...)
-        local re = RS:FindFirstChild("RemoteEvents"); if not re then return nil end
-        for _,n in ipairs({...}) do local x=re:FindFirstChild(n); if x then return x end end
+        local re = RS:FindFirstChild("RemoteEvents")
+        if not re then return nil end
+        for _,n in ipairs({...}) do
+            local x = re:FindFirstChild(n)
+            if x then return x end
+        end
         return nil
     end
+
     local function resolveRemotes()
         return {
             StartDrag = getRemote("RequestStartDraggingItem","StartDraggingItem"),
@@ -200,6 +217,8 @@ return function(C, R, UI)
         }
     end
 
+    local DragStarted = setmetatable({}, { __mode = "k" })
+
     local function safeStartDrag(r, model)
         if r and r.StartDrag and model and model.Parent then
             local ok = pcall(function() r.StartDrag:FireServer(model) end)
@@ -207,6 +226,7 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function safeStopDrag(r, model)
         if r and r.StopDrag and model and model.Parent then
             local ok = pcall(function() r.StopDrag:FireServer(model) end)
@@ -214,16 +234,62 @@ return function(C, R, UI)
         end
         return false
     end
+
     local function finallyStopDrag(r, model)
         task.delay(0.05, function() pcall(safeStopDrag, r, model) end)
         task.delay(0.20, function() pcall(safeStopDrag, r, model) end)
     end
+
     local function finallyStopDragTwice(r, model)
         pcall(safeStopDrag, r, model)
         Run.Heartbeat:Wait()
         pcall(safeStopDrag, r, model)
         task.delay(0.05, function() pcall(safeStopDrag, r, model) end)
         task.delay(0.20, function() pcall(safeStopDrag, r, model) end)
+    end
+
+    local function markDragStarted(model)
+        if not (model and model.Parent) then return end
+        DragStarted[model] = true
+        pcall(function() model:SetAttribute("BringDragStarted", true) end)
+    end
+
+    local function clearDragStarted(model)
+        if not model then return end
+        DragStarted[model] = nil
+        pcall(function()
+            if model and model.Parent then
+                model:SetAttribute("BringDragStarted", nil)
+            end
+        end)
+    end
+
+    local function stopIfDragging(r, model)
+        if not model then return end
+        if DragStarted[model] then
+            finallyStopDrag(r, model)
+            clearDragStarted(model)
+        end
+    end
+
+    local function stopIfDraggingTwice(r, model)
+        if not model then return end
+        if DragStarted[model] then
+            finallyStopDragTwice(r, model)
+            clearDragStarted(model)
+        end
+    end
+
+    local function stopAllOutstandingDrags()
+        local r = resolveRemotes()
+        for model,_ in pairs(DragStarted) do
+            if model and model.Parent then
+                finallyStopDragTwice(r, model)
+                clearDragStarted(model)
+            else
+                DragStarted[model] = nil
+            end
+        end
     end
 
     local function setCollide(model, on, snapshot)
@@ -235,9 +301,13 @@ return function(C, R, UI)
             return
         end
         local snap = {}
-        for _,p in ipairs(parts) do snap[p]=p.CanCollide; p.CanCollide=false end
+        for _,p in ipairs(parts) do
+            snap[p] = p.CanCollide
+            p.CanCollide = false
+        end
         return snap
     end
+
     local function zeroAssembly(model)
         for _,p in ipairs(getAllParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -246,7 +316,8 @@ return function(C, R, UI)
     end
 
     local function computeForwardDropCF()
-        local root = hrp(); if not root then return nil end
+        local root = hrp()
+        if not root then return nil end
         local head = headPart()
         local basePos = head and head.Position or (root.Position + Vector3.new(0,4,0))
         local look = root.CFrame.LookVector
@@ -255,27 +326,31 @@ return function(C, R, UI)
     end
 
     local function pivotOverTarget(model, target)
-        local mp = mainPart(target); if not mp then return end
+        local mp = mainPart(target)
+        if not mp then return end
         local above = mp.CFrame + Vector3.new(0, FALLBACK_UP, 0)
         local snap = setCollide(model, false)
         zeroAssembly(model)
         if model:IsA("Model") then
             model:PivotTo(above)
         else
-            local p=mainPart(model); if p then p.CFrame=above end
+            local p = mainPart(model)
+            if p then p.CFrame = above end
         end
         for _,p in ipairs(getAllParts(model)) do
             p.AssemblyLinearVelocity = Vector3.new(0,-8,0)
         end
         task.delay(COLLIDE_OFF_SEC, function() setCollide(model, true, snap) end)
     end
+
     local function moveModel(model, cf)
         local snap = setCollide(model, false)
         zeroAssembly(model)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
-            local p=mainPart(model); if p then p.CFrame=cf end
+            local p = mainPart(model)
+            if p then p.CFrame = cf end
         end
         setCollide(model, true, snap)
     end
@@ -284,7 +359,11 @@ return function(C, R, UI)
         local p = fire:FindFirstChild("Center") or fire:FindFirstChild("InnerTouchZone") or mainPart(fire) or fire.PrimaryPart
         return (p and p.CFrame) or fire:GetPivot()
     end
-    local function fireHandoffCF(fire) return fireCenterCF(fire) + Vector3.new(0, 1.5, 0) end
+
+    local function fireHandoffCF(fire)
+        return fireCenterCF(fire) + Vector3.new(0, 1.5, 0)
+    end
+
     local function scrCenterCF(scr)
         local p = mainPart(scr) or scr.PrimaryPart
         return (p and p.CFrame) or scr:GetPivot()
@@ -324,6 +403,7 @@ return function(C, R, UI)
     local function burnFlow(model, campfire)
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
+        if started then markDragStarted(model) end
         Run.Heartbeat:Wait()
         task.wait(DRAG_SETTLE)
         pivotOverTarget(model, campfire)
@@ -332,12 +412,14 @@ return function(C, R, UI)
             pcall(function() r.BurnItem:FireServer(campfire, Instance.new("Model")) end)
         end
         awaitConsumedOrMoved(model, CONSUME_WAIT)
-        if started then finallyStopDrag(r, model) end
+        if started then stopIfDragging(r, model) end
         refreshPrompts(model)
     end
+
     local function cookFlow(model, campfire)
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
+        if started then markDragStarted(model) end
         Run.Heartbeat:Wait()
         task.wait(DRAG_SETTLE)
         moveModel(model, fireHandoffCF(campfire))
@@ -350,7 +432,7 @@ return function(C, R, UI)
         task.wait(ACTION_HOLD)
         local cookedName = RAW_TO_COOKED[model.Name]
         awaitConsumedOrMoved(model, CONSUME_WAIT)
-        if started then finallyStopDrag(r, model) end
+        if started then stopIfDragging(r, model) end
         task.delay(0.15, function()
             if cookedName then
                 local cooked = (function()
@@ -373,7 +455,9 @@ return function(C, R, UI)
                     if mp then
                         local dir = (mp.Position - center).Unit
                         local snap = setCollide(cooked, false)
-                        if cooked:IsA("Model") then cooked:PivotTo(mp.CFrame + CFrame.new(dir*1.5).Position) end
+                        if cooked:IsA("Model") then
+                            cooked:PivotTo(mp.CFrame + CFrame.new(dir*1.5).Position)
+                        end
                         setCollide(cooked, true, snap)
                     end
                 end
@@ -381,9 +465,11 @@ return function(C, R, UI)
         end)
         refreshPrompts(model)
     end
+
     local function scrapFlow(model, scrapper)
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
+        if started then markDragStarted(model) end
         Run.Heartbeat:Wait()
         task.wait(DRAG_SETTLE)
         moveModel(model, scrCenterCF(scrapper) + Vector3.new(0, 1.5, 0))
@@ -395,7 +481,7 @@ return function(C, R, UI)
         if not okCall then pivotOverTarget(model, scrapper) end
         task.wait(ACTION_HOLD)
         awaitConsumedOrMoved(model, CONSUME_WAIT)
-        if started then finallyStopDrag(r, model) end
+        if started then stopIfDragging(r, model) end
         refreshPrompts(model)
     end
 
@@ -409,12 +495,13 @@ return function(C, R, UI)
     end
 
     local function groundCFAroundPlayer(model)
-        local root = hrp(); if not root then return nil end
+        local root = hrp()
+        if not root then return nil end
         local head = headPart()
         local basePos = head and head.Position or (root.Position + Vector3.new(0, 4, 0))
-        local look    = root.CFrame.LookVector
-        local offset  = ringOffset()
-        local waveY   = math.sin(dropCounter * AIR_DROP_WAVE_FREQUENCY) * AIR_DROP_WAVE_AMPLITUDE
+        local look = root.CFrame.LookVector
+        local offset = ringOffset()
+        local waveY = math.sin(dropCounter * AIR_DROP_WAVE_FREQUENCY) * AIR_DROP_WAVE_AMPLITUDE
         local pos = basePos
             + look * FALLBACK_AHEAD
             + Vector3.new(0, DROP_ABOVE_HEAD_STUDS, 0)
@@ -505,9 +592,11 @@ return function(C, R, UI)
 
     local function stickyDropNearPlayer(model)
         if not (model and model.Parent) then return false end
-        local root = hrp(); if not root then return false end
+        local root = hrp()
+        if not root then return false end
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
+        if started then markDragStarted(model) end
         Run.Heartbeat:Wait()
 
         local head = headPart()
@@ -523,7 +612,8 @@ return function(C, R, UI)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
-            local p = mainPart(model); if p then p.CFrame = cf end
+            local p = mainPart(model)
+            if p then p.CFrame = cf end
         end
 
         for i=1,3 do
@@ -533,7 +623,8 @@ return function(C, R, UI)
             if model:IsA("Model") then
                 model:PivotTo(cf2)
             else
-                local p = mainPart(model); if p then p.CFrame = cf2 end
+                local p = mainPart(model)
+                if p then p.CFrame = cf2 end
             end
         end
 
@@ -546,7 +637,7 @@ return function(C, R, UI)
         end
 
         if started then
-            finallyStopDragTwice(r, model)
+            stopIfDraggingTwice(r, model)
         end
         refreshPrompts(model)
 
@@ -577,9 +668,11 @@ return function(C, R, UI)
 
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
+        if started then markDragStarted(model) end
         Run.Heartbeat:Wait()
         local cf = groundCFAroundPlayer(model) or computeForwardDropCF()
         if not cf then
+            if started then stopIfDragging(r, model) end
             return false
         end
         local snap = setCollide(model, false)
@@ -587,10 +680,11 @@ return function(C, R, UI)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
-            local p = mainPart(model); if p then p.CFrame = cf end
+            local p = mainPart(model)
+            if p then p.CFrame = cf end
         end
         setCollide(model, true, snap)
-        if started then finallyStopDrag(r, model) end
+        if started then stopIfDragging(r, model) end
         for _,p in ipairs(getAllParts(model)) do
             p.Anchored = false
             p.AssemblyLinearVelocity  = Vector3.new()
@@ -611,15 +705,29 @@ return function(C, R, UI)
 
     local function makeOrb(cf, name)
         local part = Instance.new("Part")
-        part.Name = name; part.Shape = Enum.PartType.Ball; part.Size = Vector3.new(1.5,1.5,1.5)
-        part.Material = Enum.Material.Neon; part.Color = Color3.fromRGB(255,200,50)
-        part.Anchored = true; part.CanCollide = false; part.CanTouch = false; part.CanQuery = false
-        part.CFrame = cf; part.Parent = WS
-        local light = Instance.new("PointLight"); light.Range = 16; light.Brightness = 3; light.Parent = part
+        part.Name = name
+        part.Shape = Enum.PartType.Ball
+        part.Size = Vector3.new(1.5,1.5,1.5)
+        part.Material = Enum.Material.Neon
+        part.Color = Color3.fromRGB(255,200,50)
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanTouch = false
+        part.CanQuery = false
+        part.CFrame = cf
+        part.Parent = WS
+        local light = Instance.new("PointLight")
+        light.Range = 16
+        light.Brightness = 3
+        light.Parent = part
         return part
     end
+
     local function mergedSet(a, b)
-        local t = {}; for k,v in pairs(a) do if v then t[k]=true end end; for k,v in pairs(b) do if v then t[k]=true end end; return t
+        local t = {}
+        for k,v in pairs(a) do if v then t[k]=true end end
+        for k,v in pairs(b) do if v then t[k]=true end end
+        return t
     end
 
     local DRAG_SPEED    = 18
@@ -632,7 +740,8 @@ return function(C, R, UI)
         if model:IsA("Model") then
             model:PivotTo(cf)
         else
-            local p = mainPart(model); if p then p.CFrame = cf end
+            local p = mainPart(model)
+            if p then p.CFrame = cf end
         end
     end
 
@@ -696,7 +805,9 @@ return function(C, R, UI)
         end
     end
 
-    local function itemsRootOrNil() return WS:FindFirstChild("Items") end
+    local function itemsRootOrNil()
+        return WS:FindFirstChild("Items")
+    end
 
     local CROCKPOT_SCAN_PERIOD = 3.0
     local _crockCache = { t = 0, parts = {} }
@@ -880,7 +991,8 @@ return function(C, R, UI)
         if not nameMatches(selectedSet, m) then
             return false
         end
-        local mp = mainPart(m); if not mp then return false end
+        local mp = mainPart(m)
+        if not mp then return false end
         return (mp.Position - center).Magnitude <= radius
     end
 
@@ -909,7 +1021,8 @@ return function(C, R, UI)
             model:SetAttribute(INFLT_ATTR, now())
             model:SetAttribute(JOB_ATTR, tostring(jobId))
         end)
-        local mp = mainPart(model); if not mp then return end
+        local mp = mainPart(model)
+        if not mp then return end
         local H = bboxHeight(model)
 
         local riserY = orbPos.Y - 1.0 + math.clamp(H * 0.45, 0.8, 3.0)
@@ -923,7 +1036,8 @@ return function(C, R, UI)
             if model0:IsA("Model") then
                 model0:PivotTo(cf)
             else
-                local p = mainPart(model0); if p then p.CFrame = cf end
+                local p = mainPart(model0)
+                if p then p.CFrame = cf end
             end
         end
 
@@ -942,6 +1056,7 @@ return function(C, R, UI)
             end
             task.wait(STEP_WAIT)
         end
+
         while model and model.Parent do
             local pivot = model:IsA("Model") and model:GetPivot() or (mainPart(model) and mainPart(model).CFrame)
             if not pivot then break end
@@ -1032,7 +1147,9 @@ return function(C, R, UI)
     local function setFromChoice(choice)
         local s = {}
         if type(choice) == "table" then
-            for _,v in ipairs(choice) do if v and v ~= "" then s[v]=true end end
+            for _,v in ipairs(choice) do
+                if v and v ~= "" then s[v]=true end
+            end
         elseif choice and choice ~= "" then
             s[choice] = true
         end
@@ -1057,7 +1174,8 @@ return function(C, R, UI)
 
         local ok = pcall(function()
             dropCounter = 0
-            local itemsFolder = itemsRootOrNil(); if not itemsFolder then return end
+            local itemsFolder = itemsRootOrNil()
+            if not itemsFolder then return end
             local root = hrp()
 
             local limitOn = C.State.BringLimitEnabled and true or false
@@ -1153,6 +1271,7 @@ return function(C, R, UI)
 
         _bringBusy = false
         if not ok then
+            stopAllOutstandingDrags()
             return
         end
     end
@@ -1259,19 +1378,22 @@ return function(C, R, UI)
             local c = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot()).Position
             return Vector3.new(c.X, c.Y + ORB_OFFSET_Y + 10, c.Z)
         end
+
         local function scrapOrbPos()
             local scr = SCRAPPER_PATH
             if not scr then return nil end
             local c = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()).Position
             return Vector3.new(c.X, c.Y + ORB_OFFSET_Y + 10, c.Z)
         end
+
         local function liveOrb1Pos()
             local o = WS:FindFirstChild("orb1")
             return o and o:IsA("BasePart") and o.Position or nil
         end
 
         local function kickDown(m, orbY)
-            local mp = mainPart(m); if not mp then return end
+            local mp = mainPart(m)
+            if not mp then return end
             pcall(function() mp.Anchored = false end)
             pcall(function() mp.AssemblyLinearVelocity  = Vector3.new(0, ORB_KICK_VY, 0) end)
             pcall(function() mp.AssemblyAngularVelocity = Vector3.new() end)
@@ -1290,21 +1412,26 @@ return function(C, R, UI)
             acc = 0
 
             local positions = {}
-            local pLive = liveOrb1Pos(); if pLive then positions[#positions+1] = pLive end
-            local pCamp = campOrbPos();  if pCamp then positions[#positions+1] = pCamp end
-            local pScr  = scrapOrbPos(); if pScr  then positions[#positions+1] = pScr  end
+            local pLive = liveOrb1Pos()
+            if pLive then positions[#positions+1] = pLive end
+            local pCamp = campOrbPos()
+            if pCamp then positions[#positions+1] = pCamp end
+            local pScr = scrapOrbPos()
+            if pScr then positions[#positions+1] = pScr end
             if #positions == 0 then return end
 
-            local items = WS:FindFirstChild("Items"); if not items then return end
+            local items = WS:FindFirstChild("Items")
+            if not items then return end
             for _,m in ipairs(items:GetChildren()) do
                 if not m:IsA("Model") then continue end
-                local mp = mainPart(m); if not mp then continue end
+                local mp = mainPart(m)
+                if not mp then continue end
 
                 local nearest, orbY = nil, nil
                 local pos = mp.Position
                 for _,o in ipairs(positions) do
                     local d = (pos - o).Magnitude
-                    if d <= ORB_RADIUS then nearest, orbY = true, o.Y; break end
+                    if d <= ORB_RADIUS then nearest, orbY = true, o.Y break end
                 end
 
                 if nearest then
@@ -1330,6 +1457,12 @@ return function(C, R, UI)
                     watched[m] = nil
                 end
             end
+        end)
+    end
+
+    if type(C.RegisterCleanup) == "function" then
+        C.RegisterCleanup(function()
+            stopAllOutstandingDrags()
         end)
     end
 end
