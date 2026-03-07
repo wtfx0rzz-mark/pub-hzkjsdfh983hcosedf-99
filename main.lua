@@ -14,12 +14,12 @@ E.__PUB99_MAIN_SINGLETON[jobKey] = true
 local function httpget(u) return game:HttpGet(u) end
 local BASE = "https://raw.githubusercontent.com/wtfx0rzz-mark/pub-hzkjsdfh983hcosedf-99/refs/heads/main/"
 local URLS = {
-    UI     = BASE .. "ui.lua",
-    Auto   = BASE .. "auto.lua",
-    Bring  = BASE .. "bring.lua",
-    Combat = BASE .. "combat.lua",
-    Player = BASE .. "player.lua",
-    Player = BASE .. "chestRun.lua"
+    UI       = BASE .. "ui.lua",
+    Auto     = BASE .. "auto.lua",
+    Bring    = BASE .. "bring.lua",
+    Combat   = BASE .. "combat.lua",
+    Player   = BASE .. "player.lua",
+    ChestRun = BASE .. "chestRun.lua",
 }
 
 local function safeLoad(url, label)
@@ -144,7 +144,6 @@ do
     end))
 end
 
--- PATCHED: detect Jungle via "Jungle Temple" landmark (same as the other main module)
 local function findBiomeName()
     local WS = C.Services.WS or game:GetService("Workspace")
     local map = WS:FindFirstChild("Map")
@@ -271,10 +270,11 @@ task.spawn(function()
 end)
 
 local modules = {
-    { name = "Combat", url = URLS.Combat },
-    { name = "Bring",  url = URLS.Bring  },
-    { name = "Player", url = URLS.Player },
-    { name = "Auto",   url = URLS.Auto   },
+    { name = "Combat",   url = URLS.Combat   },
+    { name = "Bring",    url = URLS.Bring    },
+    { name = "Player",   url = URLS.Player   },
+    { name = "Auto",     url = URLS.Auto     },
+    { name = "ChestRun", url = URLS.ChestRun },
 }
 
 for _, m in ipairs(modules) do
