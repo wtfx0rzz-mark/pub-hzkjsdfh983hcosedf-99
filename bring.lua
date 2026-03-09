@@ -57,13 +57,13 @@ return function(C, R, UI)
     local medicalItems = {"Bandage","MedKit"}
     local weaponsArmor = {
         "Revolver","Rifle","Leather Body","Iron Body","Good Axe","Strong Axe","Hammer",
-        "Chainsaw","Crossbow","Katana","Kunai","Laser Cannon","Laser Sword","Morningstar","Poison Claws","Riot Shield","Spear","Tactical Shotgun","Wildfire",
-        "Sword","Ice Axe","Scythe","Thorn Body","Corrupted Thorn Body","Impact Grenade","Dynamite","Corrupted Shotgun","Corrupted Revolver","Corrupted Thrown Axe"
+        "Chainsaw","Crossbow","Katana","Kunai","Laser Cannon","Ray Gun","Infernal Sword","Laser Sword","Ice Sword","Poison Claws","Morningstar","Riot Shield","Spear","Poison Spear","Tactical Shotgun","Wildfire",
+        "Sword","Ice Axe","Scythe","Thorn Body","Alien Armor","Corrupted Thorn Body","Impact Grenade","Dynamite","Corrupted Shotgun","Corrupted Revolver","Corrupted Thrown Axe","Blowpipe"
     }
     local ammoMisc = {
         "Giant Sack","Infernal Sack","Good Sack","Mossy Coin","Cultist","Alien","Alien Elite","Sapling",
-        "Basketball","Blueprint","Diamond","Gem of the Forest Fragment","Flashlight","Old Taming flute","Old Rod","Cultist Gem",
-        "Tusk","Revolver Ammo","Rifle Ammo","Shotgun Ammo","Explosive Revolver Ammo","Explosive Rifle Ammo","Sacrifice Totem","Anvil Back","Anvil Front","Anvil Base","Crystal Skull Key"
+        "Basketball","Blueprint","Diamond","Gem of the Forest Fragment","Gem of the Forest","Flashlight","Old Taming flute","Old Rod","Cultist Gem",
+        "Tusk","Revolver Ammo","Rifle Ammo","Shotgun Ammo","Explosive Revolver Ammo","Explosive Rifle Ammo","Sacrifice Totem","Anvil Back","Anvil Front","Anvil Base","Armor Trim","Crystal Skull Key"
     }
     local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion Shell","Polar Bear Pelt","Arctic Fox Pelt"}
 
@@ -78,12 +78,6 @@ return function(C, R, UI)
     scrapAlso["Chair"] = true
 
     local RAW_TO_COOKED = { ["Morsel"]="Cooked Morsel", ["Steak"]="Cooked Steak", ["Ribs"]="Cooked Ribs" }
-
-    local STICKY_DROP = {
-        ["Strong Flashlight"] = true,
-        ["Old Flashlight"] = true,
-        ["Revolver"] = true
-    }
 
     local function hrp()
         local ch = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
@@ -312,6 +306,25 @@ return function(C, R, UI)
         for _,p in ipairs(getAllParts(model)) do
             p.AssemblyLinearVelocity  = Vector3.new()
             p.AssemblyAngularVelocity = Vector3.new()
+        end
+    end
+
+    local function severeExternalWelds(model)
+        if not (model and model.Parent) then return end
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("WeldConstraint") then
+                local p0 = d.Part0
+                local p1 = d.Part1
+                if (p0 and not p0:IsDescendantOf(model)) or (p1 and not p1:IsDescendantOf(model)) then
+                    pcall(function() d:Destroy() end)
+                end
+            end
+            if d:IsA("BasePart") and d.Anchored then
+                pcall(function() d.Anchored = false end)
+            end
+        end
+        if model:IsA("BasePart") and model.Anchored then
+            pcall(function() model.Anchored = false end)
         end
     end
 
@@ -546,125 +559,9 @@ return function(C, R, UI)
         return CFrame.lookAt(pos, pos + Vector3.new(dir.X, 0, dir.Z))
     end
 
-    local function rayParamsForRevolverSnap(ignoreModel)
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.IgnoreWater = true
-        local ex = { lp.Character }
-        local items = WS:FindFirstChild("Items")
-        if items then table.insert(ex, items) end
-        if ignoreModel then table.insert(ex, ignoreModel) end
-        params.FilterDescendantsInstances = ex
-        return params
-    end
-
-    local function revolverSnapDown(model, maxDepth, pad)
-        if not (model and model.Parent) then return false end
-        if model.Name ~= "Revolver" then return false end
-        local rp = physicalRootPart(model)
-        if not rp then return false end
-        local depth = maxDepth or 360
-        local extraPad = pad or 0.14
-        local params = rayParamsForRevolverSnap(model)
-        local start = rp.Position + Vector3.new(0, 80, 0)
-        local hit = WS:Raycast(start, Vector3.new(0, -depth, 0), params)
-        if not hit then return false end
-        local halfY = rp.Size.Y * 0.5
-        local targetPos = Vector3.new(rp.Position.X, hit.Position.Y + halfY + extraPad, rp.Position.Z)
-        local rot = (rp.CFrame - rp.CFrame.Position)
-        local targetCF = CFrame.new(targetPos) * rot
-        local snap = setCollide(model, false)
-        zeroAssembly(model)
-        if model:IsA("Model") then
-            model:PivotTo(targetCF)
-        else
-            local p = mainPart(model)
-            if p then p.CFrame = targetCF end
-        end
-        setCollide(model, true, snap)
-        for _,p in ipairs(getAllParts(model)) do
-            p.Anchored = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-        end
-        return true
-    end
-
-    local function stickyDropNearPlayer(model)
-        if not (model and model.Parent) then return false end
-        local root = hrp()
-        if not root then return false end
-        local r = resolveRemotes()
-        local started = safeStartDrag(r, model)
-        if started then markDragStarted(model) end
-        Run.Heartbeat:Wait()
-
-        local head = headPart()
-        local basePos = head and head.Position or (root.Position + Vector3.new(0, 4, 0))
-        local look = root.CFrame.LookVector
-        local off = ringOffset()
-        local targetXZ = basePos + look * FALLBACK_AHEAD + Vector3.new(off.X, 0, off.Z)
-
-        local snap = setCollide(model, false)
-        zeroAssembly(model)
-
-        local cf = settleCFForModelAtXZ(model, targetXZ, look)
-        if model:IsA("Model") then
-            model:PivotTo(cf)
-        else
-            local p = mainPart(model)
-            if p then p.CFrame = cf end
-        end
-
-        for i=1,3 do
-            Run.Heartbeat:Wait()
-            zeroAssembly(model)
-            local cf2 = settleCFForModelAtXZ(model, targetXZ, look)
-            if model:IsA("Model") then
-                model:PivotTo(cf2)
-            else
-                local p = mainPart(model)
-                if p then p.CFrame = cf2 end
-            end
-        end
-
-        setCollide(model, true, snap)
-
-        for _,p in ipairs(getAllParts(model)) do
-            p.Anchored = false
-            p.AssemblyLinearVelocity  = Vector3.new()
-            p.AssemblyAngularVelocity = Vector3.new()
-        end
-
-        if started then
-            stopIfDraggingTwice(r, model)
-        end
-        refreshPrompts(model)
-
-        if model and model.Parent and model.Name == "Revolver" then
-            task.delay(0.20, function()
-                if not (model and model.Parent) then return end
-                revolverSnapDown(model, 360, 0.14)
-            end)
-        end
-
-        task.delay(0.5, function()
-            pcall(function()
-                if model and model.Parent then
-                    model:SetAttribute("OrbInFlightAt", nil)
-                    model:SetAttribute("OrbJob", nil)
-                    model:SetAttribute("DeliveredAtOrb", nil)
-                end
-            end)
-        end)
-        return true
-    end
-
     local function dropNearPlayer(model)
         if not (model and model.Parent) then return false end
-        if model:IsA("Model") and STICKY_DROP[model.Name] then
-            return stickyDropNearPlayer(model)
-        end
+        severeExternalWelds(model)
 
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
@@ -778,31 +675,6 @@ return function(C, R, UI)
                 end
             end)
         end)
-
-        if model and model.Parent and model.Name == "Revolver" then
-            task.delay(0.20, function()
-                if not (model and model.Parent) then return end
-                revolverSnapDown(model, 360, 0.14)
-            end)
-        end
-
-        if model:IsA("Model") and STICKY_DROP[model.Name] then
-            task.delay(0.12, function()
-                if not (model and model.Parent) then return end
-                local root = hrp()
-                local look = root and root.CFrame.LookVector or Vector3.new(0,0,-1)
-                local cf2 = settleCFForModelAtXZ(model, Vector3.new(orbPos.X, orbPos.Y, orbPos.Z), look)
-                local snap = setCollide(model, false)
-                zeroAssembly(model)
-                setPivot(model, cf2)
-                setCollide(model, true, snap)
-                for _,p in ipairs(getAllParts(model)) do
-                    p.Anchored = false
-                    p.AssemblyLinearVelocity  = Vector3.new()
-                    p.AssemblyAngularVelocity = Vector3.new()
-                end
-            end)
-        end
     end
 
     local function itemsRootOrNil()
@@ -946,7 +818,7 @@ return function(C, R, UI)
         if selectedSet["Polar Bear Pelt"] and nm == "Polar Bear Pelt" then return true end
         if selectedSet["Arctic Fox Pelt"] and nm == "Arctic Fox Pelt" then return true end
         if selectedSet["Spear"] and l:find("spear",1,true) and not hasHumanoid(m) then return true end
-        if selectedSet["Sword"] and l:find("sword",1,true) and not hasHumanoid(m) then return true end
+        if selectedSet["Sword"] and l:find("sword",1,true) and not l:find("fish",1,true) and not hasHumanoid(m) then return true end
         if selectedSet["Crossbow"] and l:find("crossbow",1,true) and not l:find("cultist",1,true) and not hasHumanoid(m) then return true end
         if selectedSet["Blueprint"] and l:find("blueprint",1,true) then return true end
         if selectedSet["Flashlight"] and l:find("flashlight",1,true) and not hasHumanoid(m) then return true end
@@ -1017,6 +889,7 @@ return function(C, R, UI)
 
     local function startConveyor(model, orbPos, jobId)
         if not (model and model.Parent) then return end
+        severeExternalWelds(model)
         pcall(function()
             model:SetAttribute(INFLT_ATTR, now())
             model:SetAttribute(JOB_ATTR, tostring(jobId))
@@ -1142,6 +1015,34 @@ return function(C, R, UI)
                 emptyPasses = 0
             end
         end
+    end
+
+    local function burnNearby()
+        local camp = CAMPFIRE_PATH; if not camp then return end
+        local root = hrp(); if not root then return end
+        local campCF = (mainPart(camp) and mainPart(camp).CFrame or camp:GetPivot())
+        requestMoreStreamingAround({ root.Position, campCF.Position })
+        local jobId = ("%d-%d"):format(os.time(), math.random(1,1e6))
+        local orb2 = makeOrb(root.CFrame, "orb2")
+        local orb1 = makeOrb(campCF + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
+        local targets = mergedSet(fuelSet, cookSet)
+        runConveyorJob(orb2.Position, orb1.Position, targets, jobId)
+        if orb1 then orb1:Destroy() end
+        if orb2 then orb2:Destroy() end
+    end
+
+    local function scrapNearby()
+        local scr = SCRAPPER_PATH; if not scr then return end
+        local root = hrp(); if not root then return end
+        local scrCF = (mainPart(scr) and mainPart(scr).CFrame or scr:GetPivot()).Position
+        requestMoreStreamingAround({ root.Position, scrCF })
+        local jobId = ("%d-%d"):format(os.time(), math.random(1,1e6))
+        local orb2 = makeOrb(root.CFrame, "orb2")
+        local orb1 = makeOrb((mainPart(SCRAPPER_PATH) and mainPart(SCRAPPER_PATH).CFrame or SCRAPPER_PATH:GetPivot()) + Vector3.new(0, ORB_OFFSET_Y + 10, 0), "orb1")
+        local targets = mergedSet(junkSet, scrapAlso)
+        runConveyorJob(orb2.Position, orb1.Position, targets, jobId)
+        if orb1 then orb1:Destroy() end
+        if orb2 then orb2:Destroy() end
     end
 
     local function setFromChoice(choice)
@@ -1316,6 +1217,10 @@ return function(C, R, UI)
         return nil
     end
 
+    tab:Section({ Title = "Actions" })
+    tab:Button({ Title = "Burn/Cook Nearby", Callback = burnNearby })
+    tab:Button({ Title = "Scrap Nearby",      Callback = scrapNearby })
+
     tab:Section({ Title = "Bring Limits" })
     tab:Toggle({
         Title = "Enable per-name limit",
@@ -1431,7 +1336,7 @@ return function(C, R, UI)
                 local pos = mp.Position
                 for _,o in ipairs(positions) do
                     local d = (pos - o).Magnitude
-                    if d <= ORB_RADIUS then nearest, orbY = true, o.Y break end
+                    if d <= ORB_RADIUS then nearest, orbY = true, o.Y; break end
                 end
 
                 if nearest then
