@@ -313,9 +313,15 @@ return function(C, R, UI)
     end
 
     if C.State.AFK == nil then C.State.AFK = false end
+    if C.State.Input1 == nil then C.State.Input1 = false end
+
     if C.State._AFKConn ~= nil then
         pcall(function() C.State._AFKConn:Disconnect() end)
         C.State._AFKConn = nil
+    end
+    if C.State._Input1Conn ~= nil then
+        pcall(function() C.State._Input1Conn:Disconnect() end)
+        C.State._Input1Conn = nil
     end
 
     local INPUT_BASE_INTERVAL_S = 5
@@ -355,6 +361,52 @@ return function(C, R, UI)
         return vimTap(Enum.KeyCode.One)
     end
 
+    local AFK_KEYS = {
+        Enum.KeyCode.One,
+        Enum.KeyCode.Two,
+        Enum.KeyCode.Three,
+        Enum.KeyCode.W,
+        Enum.KeyCode.A,
+        Enum.KeyCode.S,
+        Enum.KeyCode.D,
+        Enum.KeyCode.Space,
+    }
+
+    local function afkKeyAction()
+        local kc = AFK_KEYS[math.random(1, #AFK_KEYS)]
+        return vimTap(kc)
+    end
+
+    local function vuDoRandomAction()
+        local ok = pcall(function()
+            VU:CaptureController()
+            local cam = WS.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+            local x = math.floor(randf(40, math.max(41, vp.X - 40)))
+            local y = math.floor(randf(40, math.max(41, vp.Y - 40)))
+            local pos = Vector2.new(x, y)
+            if math.random(1, 3) == 1 then
+                VU:ClickButton2(pos)
+            else
+                VU:ClickButton1(pos)
+            end
+        end)
+        return ok
+    end
+
+    local function afkComboAction()
+        local roll = math.random(1, 100)
+        if roll <= 45 then
+            afkKeyAction()
+        elseif roll <= 80 then
+            vuDoRandomAction()
+        else
+            afkKeyAction()
+            task.wait(0.08)
+            vuDoRandomAction()
+        end
+    end
+
     local function afkStart()
         if C.State._AFKConn then return end
         local nextAt = now() + nextJitteredIntervalSeconds(INPUT_BASE_INTERVAL_S)
@@ -362,8 +414,8 @@ return function(C, R, UI)
             if not (C.State and C.State.AFK) then return end
             local t = now()
             if t < nextAt then return end
-            pcall(inputOneTap)
             nextAt = t + nextJitteredIntervalSeconds(INPUT_BASE_INTERVAL_S)
+            task.spawn(afkComboAction)
         end)
     end
 
@@ -371,6 +423,25 @@ return function(C, R, UI)
         if C.State._AFKConn then
             pcall(function() C.State._AFKConn:Disconnect() end)
             C.State._AFKConn = nil
+        end
+    end
+
+    local function input1Start()
+        if C.State._Input1Conn then return end
+        local nextAt = now() + nextJitteredIntervalSeconds(INPUT_BASE_INTERVAL_S)
+        C.State._Input1Conn = RunService.Heartbeat:Connect(function()
+            if not (C.State and C.State.Input1) then return end
+            local t = now()
+            if t < nextAt then return end
+            nextAt = t + nextJitteredIntervalSeconds(INPUT_BASE_INTERVAL_S)
+            task.spawn(inputOneTap)
+        end)
+    end
+
+    local function input1Stop()
+        if C.State._Input1Conn then
+            pcall(function() C.State._Input1Conn:Disconnect() end)
+            C.State._Input1Conn = nil
         end
     end
 
@@ -800,10 +871,12 @@ return function(C, R, UI)
 
         if infiniteJumpEnabled then stopInfJump() else disconnectConn(jumpConn); jumpConn = nil end
 
-        if C.State and C.State.AFK then
+        if C.State then
             C.State.AFK = false
+            C.State.Input1 = false
         end
         afkStop()
+        input1Stop()
 
         disableGod()
 
@@ -876,11 +949,15 @@ return function(C, R, UI)
         Value = (C.State.AFK == true),
         Callback = function(state)
             C.State.AFK = (state == true)
-            if C.State.AFK then
-                afkStart()
-            else
-                afkStop()
-            end
+            if C.State.AFK then afkStart() else afkStop() end
+        end
+    })
+    tab:Toggle({
+        Title = "Input 1",
+        Value = (C.State.Input1 == true),
+        Callback = function(state)
+            C.State.Input1 = (state == true)
+            if C.State.Input1 then input1Start() else input1Stop() end
         end
     })
     tab:Toggle({
@@ -913,6 +990,7 @@ return function(C, R, UI)
     if infiniteJumpEnabled then startInfJump() end
     if speedEnabled then setWalkSpeed(walkSpeedValue) end
     if C.State.AFK then afkStart() else afkStop() end
+    if C.State.Input1 then input1Start() else input1Stop() end
     enableGod()
 
     startHealingWatch()
