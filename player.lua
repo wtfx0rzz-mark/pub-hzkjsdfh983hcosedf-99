@@ -445,9 +445,6 @@ return function(C, R, UI)
         end
     end
 
-    --=====================================================
-    -- Godmode (ported from auto.lua)
-    --=====================================================
     local godOn = false
     local godHB = nil
     local godLastHealth = nil
@@ -516,9 +513,6 @@ return function(C, R, UI)
         godRecentUntil = 0
     end
 
-    --=====================================================
-    -- Auto Revive (Bandage/MedKit only)
-    --=====================================================
     local AR_Enable = false
     local AR_Running = false
     local AR_Busy = false
@@ -856,6 +850,36 @@ return function(C, R, UI)
         BAG.__arThread = nil
     end
 
+    local flingEnabled = false
+    local flingPower   = 10000
+    local flingConn    = nil
+
+    local function startFlingLoop()
+        if flingConn then return end
+        flingConn = RunService.Heartbeat:Connect(function()
+            if not flingEnabled then return end
+            local c = lp.Character
+            local root = c and c:FindFirstChild("HumanoidRootPart")
+            if not (root and root.Parent) then return end
+            local vel = root.Velocity
+            root.Velocity = vel * flingPower + Vector3.new(0, flingPower, 0)
+            RunService.RenderStepped:Wait()
+            if not flingEnabled then return end
+            if root and root.Parent then root.Velocity = vel end
+            RunService.Stepped:Wait()
+            if not flingEnabled then return end
+            if root and root.Parent then root.Velocity = vel + Vector3.new(0, 0.1, 0) end
+        end)
+    end
+
+    local function stopFlingLoop()
+        flingEnabled = false
+        if flingConn then
+            pcall(function() flingConn:Disconnect() end)
+            flingConn = nil
+        end
+    end
+
     BAG.__cleanup = function()
         if flyEnabled or FLYING then stopFly() end
         disconnectConn(flyCharConn); flyCharConn = nil
@@ -879,6 +903,7 @@ return function(C, R, UI)
         input1Stop()
 
         disableGod()
+        stopFlingLoop()
 
         cachedControlModule = nil
         cachedControlOk = false
@@ -984,6 +1009,37 @@ return function(C, R, UI)
             task.spawn(function()
                 runRevivePass()
             end)
+        end
+    })
+
+    tab:Divider()
+    tab:Section({ Title = "Fling Players" })
+    tab:Slider({
+        Title = "Fling Power",
+        Value = { Min = 50, Max = 55000, Default = 10000 },
+        Callback = function(v)
+            local n
+            if type(v) == "table" then
+                n = v.Value or v.Current or v.Default
+            else
+                n = v
+            end
+            n = tonumber(n)
+            if n then
+                flingPower = math.clamp(math.floor(n + 0.5), 50, 55000)
+            end
+        end
+    })
+    tab:Toggle({
+        Title = "Fling Players",
+        Value = false,
+        Callback = function(on)
+            flingEnabled = (on == true)
+            if flingEnabled then
+                startFlingLoop()
+            else
+                stopFlingLoop()
+            end
         end
     })
 
