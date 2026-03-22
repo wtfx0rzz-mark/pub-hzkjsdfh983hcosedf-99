@@ -969,6 +969,94 @@ return function(C, R, UI)
             end
         })
 
+        local zeroReloadRunning = false
+        local zeroReloadInvConn = nil
+        local zeroReloadLpConn  = nil
+        local zeroReloadAttrConns = setmetatable({}, { __mode = "k" })
+        local zeroReloadNvConns   = setmetatable({}, { __mode = "k" })
+
+        local function zrDisconnect(conn)
+            if conn then pcall(function() conn:Disconnect() end) end
+        end
+        local function zrClearItem(item)
+            zrDisconnect(zeroReloadAttrConns[item])
+            zeroReloadAttrConns[item] = nil
+            zrDisconnect(zeroReloadNvConns[item])
+            zeroReloadNvConns[item] = nil
+        end
+        local function zrForceZero(item)
+            if not (zeroReloadRunning and item and item.Parent) then return end
+            local ok, attr = pcall(function() return item:GetAttribute("ReloadTime") end)
+            if ok and attr ~= nil then
+                if attr ~= 0 then pcall(function() item:SetAttribute("ReloadTime", 0) end) end
+                return
+            end
+            local nv = item:FindFirstChild("ReloadTime")
+            if nv and nv:IsA("NumberValue") and nv.Value ~= 0 then nv.Value = 0 end
+        end
+        local function zrSetupItem(item)
+            if not (zeroReloadRunning and item and item:IsA("Instance")) then return end
+            zrClearItem(item)
+            local ok, attr = pcall(function() return item:GetAttribute("ReloadTime") end)
+            local hasAttr = ok and attr ~= nil
+            local nv = item:FindFirstChild("ReloadTime")
+            local hasNv = nv and nv:IsA("NumberValue") or false
+            if not hasAttr and not hasNv then return end
+            zrForceZero(item)
+            if hasAttr then
+                local ok2, sig = pcall(function() return item:GetAttributeChangedSignal("ReloadTime") end)
+                if ok2 and sig then
+                    zeroReloadAttrConns[item] = sig:Connect(function()
+                        if zeroReloadRunning then zrForceZero(item) end
+                    end)
+                end
+            end
+            if hasNv then
+                zeroReloadNvConns[item] = nv.Changed:Connect(function()
+                    if zeroReloadRunning and nv.Value ~= 0 then nv.Value = 0 end
+                end)
+            end
+        end
+        local function zrHookInventory(inv)
+            if not inv then return end
+            for _, child in ipairs(inv:GetChildren()) do zrSetupItem(child) end
+            zrDisconnect(zeroReloadInvConn)
+            zeroReloadInvConn = inv.ChildAdded:Connect(function(child)
+                if zeroReloadRunning then zrSetupItem(child) end
+            end)
+        end
+        local function startZeroReload()
+            if zeroReloadRunning then return end
+            zeroReloadRunning = true
+            local inv = lp:FindFirstChild("Inventory") or lp:WaitForChild("Inventory", 10)
+            if inv then zrHookInventory(inv) end
+            zrDisconnect(zeroReloadLpConn)
+            zeroReloadLpConn = lp.ChildAdded:Connect(function(child)
+                if not zeroReloadRunning then return end
+                if child.Name == "Inventory" then
+                    zrHookInventory(child)
+                else
+                    zrSetupItem(child)
+                end
+            end)
+        end
+        local function stopZeroReload()
+            if not zeroReloadRunning then return end
+            zeroReloadRunning = false
+            zrDisconnect(zeroReloadInvConn); zeroReloadInvConn = nil
+            zrDisconnect(zeroReloadLpConn);  zeroReloadLpConn  = nil
+            for item, _ in pairs(zeroReloadAttrConns) do zrClearItem(item) end
+        end
+
+        tab:Toggle({
+            Title = "Zero ReloadTime",
+            Value = true,
+            Callback = function(state)
+                if state then startZeroReload() else stopZeroReload() end
+            end
+        })
+        task.defer(startZeroReload)
+
         local FLASHLIGHT_PREF = { "Strong Flashlight", "Old Flashlight" }
         local MONSTER_NAMES = { "Deer", "Ram", "Owl" }
         local STUN_RADIUS = 24
@@ -1127,7 +1215,6 @@ return function(C, R, UI)
                 FogColor = Lighting.FogColor,
             }
         end
-
         local function touchAtmosphere(inst)
             if not inst or not inst:IsA("Atmosphere") then return end
             if not atmoOrig[inst] then
@@ -1141,15 +1228,11 @@ return function(C, R, UI)
             inst.Haze = 0
             inst.Glare = 0
         end
-
         local function applyNoFog()
             Lighting.FogStart = 1e6
             Lighting.FogEnd = 1e6 + 1
-            for _, d in ipairs(Lighting:GetDescendants()) do
-                touchAtmosphere(d)
-            end
+            for _, d in ipairs(Lighting:GetDescendants()) do touchAtmosphere(d) end
         end
-
         local function enableRemoveFog()
             if removeFogOn then return end
             removeFogOn = true
@@ -1161,7 +1244,6 @@ return function(C, R, UI)
                 applyNoFog()
             end)
         end
-
         local function disableRemoveFog()
             removeFogOn = false
             if fogConn then fogConn:Disconnect() fogConn = nil end
@@ -1182,16 +1264,11 @@ return function(C, R, UI)
                 end
             end
         end
-
         tab:Toggle({
             Title = "Remove Fog",
             Value = true,
             Callback = function(state)
-                if state then
-                    enableRemoveFog()
-                else
-                    disableRemoveFog()
-                end
+                if state then enableRemoveFog() else disableRemoveFog() end
             end
         })
         task.defer(enableRemoveFog)
@@ -1257,13 +1334,9 @@ return function(C, R, UI)
             if not (part and part.Parent) then return nil end
             local items = coinItemsFolder()
             local m = coinTopModelUnderItems(part, items)
-            if m and m.Parent and (not items or m:IsDescendantOf(items)) then
-                return m
-            end
+            if m and m.Parent and (not items or m:IsDescendantOf(items)) then return m end
             local anc = part:FindFirstAncestorOfClass("Model")
-            if anc and anc.Parent and (not items or anc:IsDescendantOf(items)) then
-                return anc
-            end
+            if anc and anc.Parent and (not items or anc:IsDescendantOf(items)) then return anc end
             if part:IsA("Model") then return part end
             return nil
         end
@@ -1277,9 +1350,7 @@ return function(C, R, UI)
         local function invokeCollect(remote, a1)
             if not (remote and remote.Parent) then return false end
             if not (a1 and a1.Parent) then return false end
-            local ok = pcall(function()
-                remote:InvokeServer(a1)
-            end)
+            local ok = pcall(function() remote:InvokeServer(a1) end)
             return ok
         end
         local function shouldFireCoin(inst)
@@ -1295,21 +1366,17 @@ return function(C, R, UI)
         local function coinScanOnce()
             local root = hrp()
             if not root then return end
-
             if not collectCointsRemote or not collectCointsRemote.Parent then
                 collectCointsRemote = getCollectCointsRemote()
             end
             if not (collectCointsRemote and collectCointsRemote.Parent) then return end
-
             local center = root.Position
             local params = OverlapParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
             params.FilterDescendantsInstances = { lp.Character }
-
             local parts = WS:GetPartBoundsInRadius(center, COIN_STATE.Radius, params) or {}
             local uniq = {}
             local fired = 0
-
             for _, p in ipairs(parts) do
                 if fired >= COIN_STATE.MaxPerScan then break end
                 if p:IsA("BasePart") then
@@ -1317,9 +1384,7 @@ return function(C, R, UI)
                     if m and isCoinModel(m) and not uniq[m] then
                         uniq[m] = true
                         if shouldFireCoin(m) then
-                            if invokeCollect(collectCointsRemote, m) then
-                                fired += 1
-                            end
+                            if invokeCollect(collectCointsRemote, m) then fired += 1 end
                         end
                     end
                 end
@@ -1340,18 +1405,14 @@ return function(C, R, UI)
                 pcall(coinScanOnce)
             end)
         end
-
         local function disableCoin()
             coinOn = false
             if coinConn then coinConn:Disconnect(); coinConn = nil end
         end
-
         tab:Toggle({
             Title = "Auto Collect Coins",
             Value = true,
-            Callback = function(state)
-                if state then enableCoin() else disableCoin() end
-            end
+            Callback = function(state) if state then enableCoin() else disableCoin() end end
         })
         if coinOn then enableCoin() end
 
@@ -1441,11 +1502,7 @@ return function(C, R, UI)
         local PLANT_CHAIN_DELAY       = nil
         local function yieldPlant(seconds)
             if seconds == nil then return end
-            if seconds <= 0 then
-                Run.Heartbeat:Wait()
-            else
-                task.wait(seconds)
-            end
+            if seconds <= 0 then Run.Heartbeat:Wait() else task.wait(seconds) end
         end
         local function computePlantPosFromModel(m)
             local mp = mainPart(m); if not mp then return nil end
@@ -1513,9 +1570,7 @@ return function(C, R, UI)
             if not items then return end
             local saplings = {}
             for _, m in ipairs(items:GetChildren()) do
-                if m:IsA("Model") and m.Name == "Sapling" then
-                    saplings[#saplings+1] = m
-                end
+                if m:IsA("Model") and m.Name == "Sapling" then saplings[#saplings+1] = m end
             end
             if #saplings == 0 then return end
             local root = hrp()
@@ -1530,17 +1585,14 @@ return function(C, R, UI)
                     local y = origin.Y + ringIndex * CIRCLE_HEIGHT_STEP
                     local x = origin.X + math.cos(theta) * CIRCLE_RADIUS
                     local z = origin.Z + math.sin(theta) * CIRCLE_RADIUS
-                    local pos = Vector3.new(x, y, z)
-                    plantModelAtExactPosition(m, pos)
+                    plantModelAtExactPosition(m, Vector3.new(x, y, z))
                 end
             end
         end
 
         tab:Button({
             Title = "Auto Plant Saplings (Circles Here)",
-            Callback = function()
-                actionCirclePlantSaplingsAtPosition()
-            end
+            Callback = function() actionCirclePlantSaplingsAtPosition() end
         })
 
         local function enableLoadDefenseSafe()
@@ -1567,6 +1619,10 @@ return function(C, R, UI)
             pcall(function() WS.StreamingPauseMode = Enum.StreamingPauseMode.Disabled end)
             if coinOn and not coinConn then enableCoin() end
             if chestFinderOn and enableChestFinder then enableChestFinder() end
+            if zeroReloadRunning then
+                local inv = lp:FindFirstChild("Inventory")
+                if inv then zrHookInventory(inv) end
+            end
             if autoLostEnabled then
                 task.wait(0.15)
                 for _, d in ipairs(WS:GetDescendants()) do trackLostModel(d) end
