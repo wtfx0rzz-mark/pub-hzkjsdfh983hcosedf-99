@@ -276,6 +276,7 @@ local modules = {
     { name = "Player",   url = URLS.Player   },
     { name = "Auto",     url = URLS.Auto     },
     { name = "ChestRun", url = URLS.ChestRun },
+    { name = "Special",  url = URLS.Special  },
 }
 
 for _, m in ipairs(modules) do
