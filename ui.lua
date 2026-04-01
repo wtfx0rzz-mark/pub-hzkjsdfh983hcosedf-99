@@ -57,6 +57,7 @@ local Tabs = {
     Player = Window:Tab({ Title = "Player", Icon = "activity", Desc = "Player options" }),
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",      Desc = "Automation" }),
     ChestRun   = Window:Tab({ Title = "Chest Run",   Icon = "cpu",      Desc = "Collect Chests" })
+    Special   = Window:Tab({ Title = "Special",   Icon = "cpu",      Desc = "Special Stuff" })
 }
 
 env().__WINDUI_99_STATE = { Lib = WindUI, Window = Window, Tabs = Tabs }
