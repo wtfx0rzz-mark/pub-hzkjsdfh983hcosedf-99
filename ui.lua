@@ -56,7 +56,7 @@ local Tabs = {
     Bring  = Window:Tab({ Title = "Bring",  Icon = "backpack", Desc = "Bring items" }),
     Player = Window:Tab({ Title = "Player", Icon = "activity", Desc = "Player options" }),
     Auto   = Window:Tab({ Title = "Auto",   Icon = "cpu",      Desc = "Automation" }),
-    ChestRun   = Window:Tab({ Title = "Chest Run",   Icon = "cpu",      Desc = "Collect Chests" })
+    ChestRun   = Window:Tab({ Title = "Chest Run",   Icon = "cpu",      Desc = "Collect Chests" }),
     Special   = Window:Tab({ Title = "Special",   Icon = "cpu",      Desc = "Special Stuff" })
 }
 
