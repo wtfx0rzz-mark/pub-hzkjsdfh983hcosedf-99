@@ -20,6 +20,7 @@ local URLS = {
     Combat   = BASE .. "combat.lua",
     Player   = BASE .. "player.lua",
     ChestRun = BASE .. "chestRun.lua",
+    Special = BASE .. "special.lua",
 }
 
 local function safeLoad(url, label)
