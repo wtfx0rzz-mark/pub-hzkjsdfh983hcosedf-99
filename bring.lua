@@ -153,7 +153,14 @@ local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion 
         end
         return t
     end
-
+local function isAnyPartLocked(model)
+    for _, p in ipairs(getAllParts(model)) do
+        local locked = false
+        local ok = pcall(function() locked = p.Locked end)
+        if ok and locked then return true end
+    end
+    return false
+end
     local function bboxHeight(model)
         local rp = physicalRootPart(model)
         if rp then return rp.Size.Y end
@@ -559,8 +566,9 @@ local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion 
     end
 
     local function dropNearPlayer(model)
-        if not (model and model.Parent) then return false end
-        severeExternalWelds(model)
+    if not (model and model.Parent) then return false end
+    if isAnyPartLocked(model) then return false end
+    severeExternalWelds(model)
 
         local r = resolveRemotes()
         local started = safeStartDrag(r, model)
@@ -886,16 +894,17 @@ local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion 
         return out
     end
 
-    local function startConveyor(model, orbPos, jobId)
-        if not (model and model.Parent) then return end
-        severeExternalWelds(model)
-        pcall(function()
-            model:SetAttribute(INFLT_ATTR, now())
-            model:SetAttribute(JOB_ATTR, tostring(jobId))
-        end)
-        local mp = mainPart(model)
-        if not mp then return end
-        local H = bboxHeight(model)
+local function startConveyor(model, orbPos, jobId)
+    if not (model and model.Parent) then return end
+    if isAnyPartLocked(model) then return end
+    severeExternalWelds(model)
+    pcall(function()
+        model:SetAttribute(INFLT_ATTR, now())
+        model:SetAttribute(JOB_ATTR, tostring(jobId))
+    end)
+    local mp = mainPart(model)
+    if not mp then return end
+    local H = bboxHeight(model)
 
         local riserY = orbPos.Y - 1.0 + math.clamp(H * 0.45, 0.8, 3.0)
         local lookDir = (Vector3.new(orbPos.X, mp.Position.Y, orbPos.Z) - mp.Position)
