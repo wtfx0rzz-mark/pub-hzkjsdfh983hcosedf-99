@@ -559,7 +559,7 @@ local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion 
     end
 
     local function dropNearPlayer(model)
-        if not (model and model.Parent) then return false end
+        if not (model and model.Parent and not model.Locked) then return false end
         severeExternalWelds(model)
 
         local r = resolveRemotes()
@@ -713,7 +713,7 @@ local pelts = {"Bunny Foot","Wolf Pelt","Alpha Wolf Pelt","Bear Pelt","Scorpion 
     end
 
     local function isModelWeldedToOutside(m)
-        if not (m and m.Parent and not m.Locked) then return false end
+        if not (m and m.Parent) then return false end
         for _,d in ipairs(m:GetDescendants()) do
             if d:IsA("WeldConstraint") then
                 local p0, p1 = d.Part0, d.Part1
