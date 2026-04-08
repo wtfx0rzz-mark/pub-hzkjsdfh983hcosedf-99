@@ -16,6 +16,7 @@ return function(C, R, UI)
         if not tab then return end
 
         C.State = C.State or {}
+        C.State.Toggles = C.State.Toggles or {}
 
         local RootRS, RootWS = nil, nil
 
@@ -198,6 +199,71 @@ return function(C, R, UI)
                 burnTargets({ Alien = true })
             end
         })
+
+        local autoBurnConn = nil
+        local autoBurnSeen = {}
+
+        local function stopAutoBurn()
+            if autoBurnConn then
+                pcall(function() autoBurnConn:Disconnect() end)
+                autoBurnConn = nil
+            end
+            autoBurnSeen = {}
+        end
+
+        local function startAutoBurn()
+            stopAutoBurn()
+            local items = itemsFolder()
+            if not items then return end
+
+            autoBurnConn = items.DescendantAdded:Connect(function(inst)
+                if not inst:IsA("Model") then return end
+                if autoBurnSeen[inst] then return end
+                local n = lower(inst.Name or "")
+                if not n:find("cultist", 1, true) then return end
+                if not inst:FindFirstChildWhichIsA("Humanoid", true) then return end
+                autoBurnSeen[inst] = true
+
+                task.spawn(function()
+                    task.wait(0.2)
+                    if not (inst and inst.Parent) then return end
+                    local Remote = findLavaBurnRemote()
+                    local Lava = findLava()
+                    if not (Remote and Lava and Lava.Parent) then return end
+                    pcall(function()
+                        if Remote:IsA("RemoteFunction") then
+                            Remote:InvokeServer(inst, Lava)
+                        else
+                            Remote:FireServer(inst, Lava)
+                        end
+                    end)
+                    task.delay(30, function()
+                        autoBurnSeen[inst] = nil
+                    end)
+                end)
+            end)
+        end
+
+        if C.State.Toggles.SpecialAutoBurnCultist == nil then
+            C.State.Toggles.SpecialAutoBurnCultist = false
+        end
+
+        tab:Toggle({
+            Title = "Auto Burn: Cultist",
+            Value = (C.State.Toggles.SpecialAutoBurnCultist == true),
+            Callback = function(state)
+                C.State.Toggles.SpecialAutoBurnCultist = (state == true)
+                if state then
+                    startAutoBurn()
+                else
+                    stopAutoBurn()
+                end
+            end
+        })
+
+        if C.State.Toggles.SpecialAutoBurnCultist == true then
+            startAutoBurn()
+        end
     end
 
     local ok, err = pcall(run)
