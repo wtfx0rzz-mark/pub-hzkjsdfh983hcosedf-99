@@ -72,6 +72,13 @@ return function(C, R, UI)
             return false
         end
 
+        local function isSelectedItem(inst, selectedSet)
+            if not inst then return false end
+            local ln = lower(inst.Name or "")
+            if selectedSet["Sapling"] and ln == "sapling" then return true end
+            return false
+        end
+
         local function topModelUnderItems(part, items)
             local cur = part
             local lastModel = nil
@@ -90,6 +97,7 @@ return function(C, R, UI)
             if RootWS ~= WS and not part:IsDescendantOf(RootWS) then return nil end
             if items and part:IsDescendantOf(items) then
                 local m = topModelUnderItems(part, items) or part:FindFirstAncestorOfClass("Model")
+                if m and isSelectedItem(m, selectedSet) then return m end
                 if m and isSelectedNPC(m, selectedSet) then return m end
             end
             local m = part:FindFirstAncestorOfClass("Model")
@@ -184,6 +192,40 @@ return function(C, R, UI)
             burnBusy = false
         end
 
+        local burnAllBusy = false
+        local function burnAllSaplings()
+            if burnAllBusy then return end
+            burnAllBusy = true
+            task.spawn(function()
+                pcall(function()
+                    local items = itemsFolder()
+                    if not items then return end
+                    local Remote = findLavaBurnRemote()
+                    local Lava = findLava()
+                    if not (Remote and Lava and Lava.Parent) then
+                        warn("[Special] BurnAllSaplings missing Remote or Lava")
+                        return
+                    end
+
+                    local okN, errN = 0, 0
+                    for _, inst in ipairs(items:GetChildren()) do
+                        if inst:IsA("Model") and lower(inst.Name or "") == "sapling" then
+                            local okCall
+                            if Remote:IsA("RemoteFunction") then
+                                okCall = pcall(function() return Remote:InvokeServer(inst, Lava) end)
+                            else
+                                okCall = pcall(function() Remote:FireServer(inst, Lava) end)
+                            end
+                            if okCall then okN += 1 else errN += 1 end
+                            task.wait(0.02)
+                        end
+                    end
+                    warn(("[Special] BurnAllSaplings: ok=%d err=%d"):format(okN, errN))
+                end)
+                burnAllBusy = false
+            end)
+        end
+
         tab:Section({ Title = "Lava Burn" })
 
         tab:Button({
@@ -197,6 +239,13 @@ return function(C, R, UI)
             Title = "Burn Aliens",
             Callback = function()
                 burnTargets({ Alien = true })
+            end
+        })
+
+        tab:Button({
+            Title = "Burn Saplings",
+            Callback = function()
+                burnAllSaplings()
             end
         })
 
@@ -267,5 +316,5 @@ return function(C, R, UI)
     end
 
     local ok, err = pcall(run)
-    if not ok then warn("[Special] module error: " .. tostring(err)) end
+    if not ok then warn("[Special] module error: " .. tostring err)) end
 end
