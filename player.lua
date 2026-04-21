@@ -314,6 +314,8 @@ return function(C, R, UI)
 
     if C.State.AFK == nil then C.State.AFK = false end
     if C.State.Input1 == nil then C.State.Input1 = false end
+    if C.State.AutoAntiAFK == nil then C.State.AutoAntiAFK = true end
+    if C.State._AutoAntiAFKManualOn == nil then C.State._AutoAntiAFKManualOn = false end
 
     if C.State._AFKConn ~= nil then
         pcall(function() C.State._AFKConn:Disconnect() end)
