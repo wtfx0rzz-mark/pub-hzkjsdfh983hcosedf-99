@@ -316,5 +316,5 @@ return function(C, R, UI)
     end
 
     local ok, err = pcall(run)
-    if not ok then warn("[Special] module error: " .. tostring err)) end
+    if not ok then warn("[Special] module error: " .. tostring(err)) end
 end
