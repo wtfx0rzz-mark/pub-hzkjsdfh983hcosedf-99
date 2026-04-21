@@ -988,6 +988,13 @@ return function(C, R, UI)
         end
     })
     tab:Toggle({
+    Title = "Auto Anti AFK",
+    Value = (C.State.AutoAntiAFK == true),
+    Callback = function(state)
+        C.State.AutoAntiAFK = (state == true)
+    end
+})
+    tab:Toggle({
         Title = "Godmode",
         Value = true,
         Callback = function(state)
