@@ -314,6 +314,8 @@ return function(C, R, UI)
 
     if C.State.AFK == nil then C.State.AFK = false end
     if C.State.Input1 == nil then C.State.Input1 = false end
+    if C.State.AutoInput1Action == nil then C.State.AutoInput1Action = true end
+    if C.State._Input1ManualOn == nil then C.State._Input1ManualOn = false end
 
     if C.State._AFKConn ~= nil then
         pcall(function() C.State._AFKConn:Disconnect() end)
@@ -325,6 +327,8 @@ return function(C, R, UI)
     end
 
     local INPUT_BASE_INTERVAL_S = 5
+    local AUTO_INPUT1_IDLE_S = 300
+
     local function now() return os.clock() end
 
     local _seeded = false
@@ -880,6 +884,44 @@ return function(C, R, UI)
         end
     end
 
+    task.spawn(function()
+        local lastPos = nil
+        local lastMoveAt = now()
+
+        while true do
+            task.wait(1)
+
+            if not (C.State and C.State.AutoInput1Action) then
+                lastPos = nil
+                lastMoveAt = now()
+            else
+                local root = hrp()
+                local pos = root and root.Position
+
+                if pos then
+                    if lastPos then
+                        if (pos - lastPos).Magnitude > 0.5 then
+                            lastMoveAt = now()
+                            if C.State.Input1 and not C.State._Input1ManualOn then
+                                C.State.Input1 = false
+                                input1Stop()
+                            end
+                        end
+                    end
+                    lastPos = pos
+                end
+
+                if not C.State.Input1 and not C.State._Input1ManualOn then
+                    local idleFor = now() - lastMoveAt
+                    if idleFor >= AUTO_INPUT1_IDLE_S then
+                        C.State.Input1 = true
+                        input1Start()
+                    end
+                end
+            end
+        end
+    end)
+
     BAG.__cleanup = function()
         if flyEnabled or FLYING then stopFly() end
         disconnectConn(flyCharConn); flyCharConn = nil
@@ -982,7 +1024,15 @@ return function(C, R, UI)
         Value = (C.State.Input1 == true),
         Callback = function(state)
             C.State.Input1 = (state == true)
+            C.State._Input1ManualOn = (state == true)
             if C.State.Input1 then input1Start() else input1Stop() end
+        end
+    })
+    tab:Toggle({
+        Title = "Auto Input 1 Action",
+        Value = (C.State.AutoInput1Action == true),
+        Callback = function(state)
+            C.State.AutoInput1Action = (state == true)
         end
     })
     tab:Toggle({
