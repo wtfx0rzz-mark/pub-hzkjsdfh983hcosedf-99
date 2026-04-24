@@ -832,9 +832,6 @@ return function(C, R, UI)
         if AR_Running then return end
         AR_Running = true
 
-        local key = "__AutoRevive_Loop__PlayerTab__"
-        _G[key] = (_G[key] == nil) and true or _G[key]
-
         BAG.__arThread = task.spawn(function()
             while AR_Running do
                 task.wait(AR_SCAN_INTERVAL)
@@ -911,7 +908,7 @@ return function(C, R, UI)
                     lastPos = pos
                 end
 
-                if not C.State.Input1 and not C.State._Input1ManualOn then
+                if not C.State.Input1 and not C.State._Input1ManualOn and not C.State.AFK then
                     local idleFor = now() - lastMoveAt
                     if idleFor >= AUTO_INPUT1_IDLE_S then
                         C.State.Input1 = true
