@@ -1034,7 +1034,7 @@ return function(C, R, UI)
     })
     tab:Toggle({
         Title = "Godmode",
-        Value = true,
+        Value = false,
         Callback = function(state)
             if state then enableGod() else disableGod() end
         end
@@ -1094,7 +1094,6 @@ return function(C, R, UI)
     if speedEnabled then setWalkSpeed(walkSpeedValue) end
     if C.State.AFK then afkStart() else afkStop() end
     if C.State.Input1 then input1Start() else input1Stop() end
-    enableGod()
 
     startHealingWatch()
     recomputeHealingAvailable()
