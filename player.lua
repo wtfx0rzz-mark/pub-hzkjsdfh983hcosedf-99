@@ -580,19 +580,16 @@ return function(C, R, UI)
     end
 
     local function aeIsFood(item)
-    if not item or not item.Parent then return false end
-    local name = tostring(item.Name)
-
-    if name == "Bandage" or name == "MedKit" then return false end
-
-    local restoreHealth = item:GetAttribute("RestoreHealth")
-    if restoreHealth and tonumber(restoreHealth) and tonumber(restoreHealth) < 0 then return false end
-
-    if item:GetAttribute("ToolName") == "Consumable" then return true end
-    if item:GetAttribute("PreparedMeal") == true then return true end
-    if name:lower():find("cooked", 1, true) then return true end
-    return false
-end
+        if not item or not item.Parent then return false end
+        local name = tostring(item.Name)
+        if name == "Bandage" or name == "MedKit" then return false end
+        local restoreHealth = item:GetAttribute("RestoreHealth")
+        if restoreHealth and tonumber(restoreHealth) and tonumber(restoreHealth) < 0 then return false end
+        if item:GetAttribute("ToolName") == "Consumable" then return true end
+        if item:GetAttribute("PreparedMeal") == true then return true end
+        if name:lower():find("cooked", 1, true) then return true end
+        return false
+    end
 
     local function aeGetBestInventoryFood()
         local inv = lp:FindFirstChild("Inventory")
@@ -692,6 +689,101 @@ end
         if aeRunning then return end
         aeRunning = true
         aeThread = task.spawn(aeWorker)
+    end
+
+    -- ============================================================
+    -- AUTO HEAL
+    -- ============================================================
+
+    local AH_HEALTH_THRESHOLD  = 45
+    local AH_INSTANT_FLOOR     = 45
+    local AH_EQUIP_WAIT        = 0.1
+    local AH_POST_HEAL_WAIT    = 0.35
+
+    local ahRunning    = false
+    local ahHealthConn = nil
+    local ahCharConn   = nil
+    local ahHealing    = false
+
+    local function ahGetHealItem()
+        local inv = lp:FindFirstChild("Inventory")
+        if not inv then return nil end
+        if inv:FindFirstChild("MedKit")  then return inv:FindFirstChild("MedKit")  end
+        if inv:FindFirstChild("Bandage") then return inv:FindFirstChild("Bandage") end
+        return nil
+    end
+
+    local function ahHeal(emergency)
+        if ahHealing and not emergency then return end
+        local item = ahGetHealItem()
+        if not item or not item.Parent then return end
+        ahHealing = true
+        local name = item.Name
+        pcall(function()
+            EquipItemHandle:FireServer("FireAllClients", item)
+        end)
+        task.wait(AH_EQUIP_WAIT)
+        local consumeTarget = TempStorage:FindFirstChild(name) or item
+        pcall(function()
+            RequestConsumeItem:InvokeServer(consumeTarget)
+        end)
+        task.wait(AH_POST_HEAL_WAIT)
+        ahHealing = false
+    end
+
+    local function ahShouldHeal(newHealth)
+        local h = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+        local maxHP = h and h.MaxHealth or 100
+        local pct = (newHealth / maxHP) * 100
+        if newHealth <= AH_INSTANT_FLOOR then return true, true end
+        if pct <= AH_HEALTH_THRESHOLD then return true, false end
+        return false, false
+    end
+
+    local function ahBindToHumanoid()
+        if ahHealthConn then
+            pcall(function() ahHealthConn:Disconnect() end)
+            ahHealthConn = nil
+        end
+        local ch = lp.Character
+        local h = ch and ch:FindFirstChildOfClass("Humanoid")
+        if not h then return end
+        ahHealthConn = h.HealthChanged:Connect(function(newHealth)
+            if not ahRunning then return end
+            local should, emergency = ahShouldHeal(newHealth)
+            if should then
+                task.spawn(function() ahHeal(emergency) end)
+            end
+        end)
+    end
+
+    local function ahStop()
+        ahRunning = false
+        ahHealing = false
+        if ahHealthConn then
+            pcall(function() ahHealthConn:Disconnect() end)
+            ahHealthConn = nil
+        end
+        if ahCharConn then
+            pcall(function() ahCharConn:Disconnect() end)
+            ahCharConn = nil
+        end
+    end
+
+    local function ahStart()
+        if ahRunning then return end
+        ahRunning = true
+        ahHealing = false
+        ahBindToHumanoid()
+        if ahCharConn then
+            pcall(function() ahCharConn:Disconnect() end)
+            ahCharConn = nil
+        end
+        ahCharConn = lp.CharacterAdded:Connect(function()
+            task.wait(0.15)
+            ahHealing = false
+            if ahRunning then ahBindToHumanoid() end
+        end)
     end
 
     -- ============================================================
@@ -1124,6 +1216,7 @@ end
 
         disableProjBlock()
         aeStop()
+        ahStop()
         stopFlingLoop()
 
         cachedControlModule = nil
@@ -1221,11 +1314,25 @@ end
             if state then enableProjBlock() else disableProjBlock() end
         end
     })
+
+    tab:Divider()
+    tab:Section({ Title = "Auto Eat" })
     tab:Toggle({
         Title = "Auto Eat",
-        Value = false,
+        Value = (C.State.AutoEatEnabled ~= false),
         Callback = function(state)
+            C.State.AutoEatEnabled = state and true or false
             if state then aeStart() else aeStop() end
+        end
+    })
+
+    tab:Section({ Title = "Auto Heal" })
+    tab:Toggle({
+        Title = "Auto Heal (MedKit > Bandage)",
+        Value = (C.State.AutoHealEnabled ~= false),
+        Callback = function(state)
+            C.State.AutoHealEnabled = state and true or false
+            if state then ahStart() else ahStop() end
         end
     })
 
@@ -1285,6 +1392,9 @@ end
     if C.State.Input1 then input1Start() else input1Stop() end
 
     task.defer(enableProjBlock)
+
+    if C.State.AutoEatEnabled ~= false then aeStart() end
+    if C.State.AutoHealEnabled ~= false then ahStart() end
 
     startHealingWatch()
     recomputeHealingAvailable()
