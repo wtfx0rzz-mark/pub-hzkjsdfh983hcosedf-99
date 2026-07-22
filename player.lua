@@ -1332,6 +1332,12 @@ return function(C, R, UI)
         Value = (C.State.AutoInput1Action == true),
         Callback = function(state)
             C.State.AutoInput1Action = (state == true)
+            if not C.State.AutoInput1Action
+                and C.State.Input1
+                and not C.State._Input1ManualOn then
+                C.State.Input1 = false
+                input1Stop()
+            end
         end
     })
     tab:Toggle({
