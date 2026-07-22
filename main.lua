@@ -276,6 +276,7 @@ local modules = {
     { name = "Bring",    url = URLS.Bring    },
     { name = "Player",   url = URLS.Player   },
     { name = "Auto",     url = URLS.Auto     },
+    { name = "AutoFish", url = URLS.AutoFish },
     { name = "ChestRun", url = URLS.ChestRun },
     { name = "Special",  url = URLS.Special  },
 }
