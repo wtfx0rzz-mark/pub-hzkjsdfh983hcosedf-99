@@ -16,6 +16,7 @@ local BASE = "https://raw.githubusercontent.com/wtfx0rzz-mark/pub-hzkjsdfh983hco
 local URLS = {
     UI       = BASE .. "ui.lua",
     Auto     = BASE .. "auto.lua",
+    AutoFish = BASE .. "autofish.lua",
     Bring    = BASE .. "bring.lua",
     Combat   = BASE .. "combat.lua",
     Player   = BASE .. "player.lua",
