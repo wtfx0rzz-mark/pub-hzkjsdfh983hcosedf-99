@@ -331,6 +331,19 @@ return function(C, R, UI)
 
     local function now() return os.clock() end
 
+    local lastRealInputAt = now()
+
+    UIS.TouchTap:Connect(function()
+        lastRealInputAt = now()
+    end)
+    UIS.InputBegan:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.MouseButton2 then
+            lastRealInputAt = now()
+        end
+    end)
+
     local _seeded = false
     local function seedOnce()
         if _seeded then return end
@@ -1181,43 +1194,51 @@ return function(C, R, UI)
         end
     end
 
-   task.spawn(function()
-    local lastPos = nil
-    local lastMoveAt = now()
+    task.spawn(function()
+        local lastPos = nil
+        local lastMoveAt = now()
 
-    while true do
-        task.wait(1)
+        while true do
+            task.wait(1)
 
-        if not (C.State and C.State.AutoInput1Action) then
-            lastPos = nil
-            lastMoveAt = now()
-        else
-            local root = hrp()
-            local pos = root and root.Position
+            if not (C.State and C.State.AutoInput1Action) then
+                lastPos = nil
+                lastMoveAt = now()
+            else
+                local root = hrp()
+                local pos = root and root.Position
 
-            if pos then
-                if lastPos then
-                    if (pos - lastPos).Magnitude > 0.5 then
-                        lastMoveAt = now()
-                        if C.State.Input1 and not C.State._Input1ManualOn then
-                            C.State.Input1 = false
-                            input1Stop()
+                if pos then
+                    if lastPos then
+                        if (pos - lastPos).Magnitude > 0.5 then
+                            lastMoveAt = now()
+                            if C.State.Input1 and not C.State._Input1ManualOn then
+                                C.State.Input1 = false
+                                input1Stop()
+                            end
                         end
                     end
+                    lastPos = pos
                 end
-                lastPos = pos
-            end
 
-            if not C.State.Input1 and not C.State._Input1ManualOn and not C.State.AFK then
-                local idleFor = now() - lastMoveAt
-                if idleFor >= AUTO_INPUT1_IDLE_S then
-                    C.State.Input1 = true
-                    input1Start()
+                if lastRealInputAt > lastMoveAt then
+                    lastMoveAt = lastRealInputAt
+                    if C.State.Input1 and not C.State._Input1ManualOn then
+                        C.State.Input1 = false
+                        input1Stop()
+                    end
+                end
+
+                if not C.State.Input1 and not C.State._Input1ManualOn and not C.State.AFK then
+                    local idleFor = now() - lastMoveAt
+                    if idleFor >= AUTO_INPUT1_IDLE_S then
+                        C.State.Input1 = true
+                        input1Start()
+                    end
                 end
             end
         end
-    end
-end)
+    end)
 
     BAG.__cleanup = function()
         if flyEnabled or FLYING then stopFly() end
