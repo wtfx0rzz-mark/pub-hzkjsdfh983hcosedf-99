@@ -1208,14 +1208,6 @@ return function(C, R, UI)
                 lastPos = pos
             end
 
-            if lastRealInputAt > lastMoveAt then
-                lastMoveAt = lastRealInputAt
-                if C.State.Input1 and not C.State._Input1ManualOn then
-                    C.State.Input1 = false
-                    input1Stop()
-                end
-            end
-
             if not C.State.Input1 and not C.State._Input1ManualOn and not C.State.AFK then
                 local idleFor = now() - lastMoveAt
                 if idleFor >= AUTO_INPUT1_IDLE_S then
