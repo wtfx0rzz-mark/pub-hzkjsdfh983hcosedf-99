@@ -463,75 +463,6 @@ return function(C, R, UI)
     end
 
     -- ============================================================
-    -- GODMODE V2
-    -- ============================================================
-
-    local projGodOn = false
-    local projGodHB = nil
-    local projGodRecentUntil = 0
-    local projGodHealthConn = nil
-    local projGodCharConn = nil
-    local PROJ_POST_DAMAGE_WINDOW = 8.0
-    local PROJ_POST_DAMAGE_INTERVAL = 1.5
-    local PROJ_IDLE_INTERVAL = 15.0
-
-    local function fireProjGod()
-        local f = RS:FindFirstChild("RemoteEvents")
-        local ev = f and f:FindFirstChild("DamagePlayer")
-        if ev and ev:IsA("RemoteEvent") then
-            pcall(function() ev:FireServer(0/0) end)
-        end
-    end
-
-    local function bindProjGodToHumanoid()
-        if projGodHealthConn then projGodHealthConn:Disconnect(); projGodHealthConn = nil end
-        local h = humanoid()
-        if not h then return end
-        projGodHealthConn = h.HealthChanged:Connect(function()
-            if not projGodOn then return end
-            projGodRecentUntil = os.clock() + PROJ_POST_DAMAGE_WINDOW
-            fireProjGod()
-            task.defer(fireProjGod)
-        end)
-    end
-
-    local function enableProjBlock()
-        if projGodOn then return end
-        projGodOn = true
-        bindProjGodToHumanoid()
-        fireProjGod()
-        task.defer(fireProjGod)
-        if projGodCharConn then projGodCharConn:Disconnect(); projGodCharConn = nil end
-        projGodCharConn = lp.CharacterAdded:Connect(function()
-            task.wait(0.15)
-            if projGodOn then
-                bindProjGodToHumanoid()
-                fireProjGod()
-            end
-        end)
-        if projGodHB then projGodHB:Disconnect() end
-        local acc = 0
-        projGodHB = RunService.Heartbeat:Connect(function(dt)
-            if not projGodOn then return end
-            acc += dt
-            local now = os.clock()
-            local interval = (now <= projGodRecentUntil) and PROJ_POST_DAMAGE_INTERVAL or PROJ_IDLE_INTERVAL
-            if acc >= interval then
-                acc = 0
-                fireProjGod()
-            end
-        end)
-    end
-
-    local function disableProjBlock()
-        projGodOn = false
-        if projGodHB then projGodHB:Disconnect() projGodHB = nil end
-        if projGodHealthConn then projGodHealthConn:Disconnect() projGodHealthConn = nil end
-        if projGodCharConn then projGodCharConn:Disconnect() projGodCharConn = nil end
-        projGodRecentUntil = 0
-    end
-
-    -- ============================================================
     -- AUTO EAT
     -- ============================================================
 
@@ -1262,7 +1193,6 @@ return function(C, R, UI)
         afkStop()
         input1Stop()
 
-        disableProjBlock()
         aeStop()
         ahStop()
         stopFlingLoop()
@@ -1361,13 +1291,6 @@ return function(C, R, UI)
             end
         end
     })
-    tab:Toggle({
-        Title = "Godmode v2",
-        Value = true,
-        Callback = function(state)
-            if state then enableProjBlock() else disableProjBlock() end
-        end
-    })
 
     tab:Divider()
     tab:Section({ Title = "Auto Eat" })
@@ -1444,8 +1367,6 @@ return function(C, R, UI)
     if speedEnabled then setWalkSpeed(walkSpeedValue) end
     if C.State.AFK then afkStart() else afkStop() end
     if C.State.Input1 then input1Start() else input1Stop() end
-
-    task.defer(enableProjBlock)
 
     if C.State.AutoEatEnabled ~= false then aeStart() end
     if C.State.AutoHealEnabled ~= false then ahStart() end
